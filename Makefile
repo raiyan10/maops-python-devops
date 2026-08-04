@@ -65,7 +65,12 @@ smoke-install:
 	"$$tmp_dir/venv/bin/maops-py" --version; \
 	"$$tmp_dir/venv/bin/maops-py" doctor; \
 	"$$tmp_dir/venv/bin/maops-py" doctor --format json | "$$tmp_dir/venv/bin/python" -m json.tool >/dev/null; \
-	"$$tmp_dir/venv/bin/python" -m maops_pydevops --version
+	"$$tmp_dir/venv/bin/python" -m maops_pydevops --version; \
+	smoke_home="$$tmp_dir/home"; mkdir -p "$$smoke_home"; \
+	HOME="$$smoke_home" "$$tmp_dir/venv/bin/maops-py" config path; \
+	smoke_bin="$$tmp_dir/fake-bin"; mkdir -p "$$smoke_bin"; \
+	cp scripts/smoke/fake-git "$$smoke_bin/git"; chmod +x "$$smoke_bin/git"; \
+	PATH="$$smoke_bin:$$PATH" HOME="$$smoke_home" "$$tmp_dir/venv/bin/maops-py" tools inspect git --format json | "$$tmp_dir/venv/bin/python" -m json.tool >/dev/null
 
 quality: format-check lint type-check coverage
 

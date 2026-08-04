@@ -1,0 +1,9 @@
+#!/bin/sh
+# Deterministic stand-in for `git` used only by `make smoke-install` / CI,
+# so tools-inspect smoke testing never depends on a real git install.
+if [ "$1" = "--version" ]; then
+  echo "git version 2.99.0 (maops-py smoke-test stub)"
+  exit 0
+fi
+echo "fake-git: unsupported invocation: $*" >&2
+exit 1

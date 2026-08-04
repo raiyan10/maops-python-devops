@@ -12,8 +12,8 @@ from maops_pydevops.version import get_version
 CHANGELOG_PATH = Path(__file__).resolve().parents[2] / "CHANGELOG.md"
 
 
-def test_get_version_is_0_1_0() -> None:
-    assert get_version() == "0.1.0"
+def test_get_version_is_0_2_0() -> None:
+    assert get_version() == "0.2.0"
 
 
 def test_matches_changelog_latest_entry() -> None:

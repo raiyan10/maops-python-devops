@@ -11,10 +11,33 @@ from __future__ import annotations
 import argparse
 import sys
 from collections.abc import Callable, Sequence
+from pathlib import Path
 
+from maops_pydevops.commands.config import (
+    build_show_report,
+    get_config_path,
+    init_config,
+    validate_config,
+)
 from maops_pydevops.commands.doctor import build_report
+from maops_pydevops.commands.tools import TOOL_ALLOWLIST, build_inspect_report
+from maops_pydevops.core.config import resolve_effective_config
+from maops_pydevops.core.config_models import (
+    MAX_COMMAND_TIMEOUT_SECONDS,
+    MIN_COMMAND_TIMEOUT_SECONDS,
+    ConfigFileStatus,
+    ConfigInitStatus,
+    is_valid_command_timeout_seconds,
+)
 from maops_pydevops.core.models import CheckStatus, OutputFormat
-from maops_pydevops.core.output import render_json, render_text
+from maops_pydevops.core.output import (
+    render_config_show_json,
+    render_config_show_text,
+    render_json,
+    render_text,
+    render_tools_inspect_json,
+    render_tools_inspect_text,
+)
 from maops_pydevops.version import get_version
 
 PROG_NAME = "maops-py"
@@ -22,6 +45,22 @@ PROG_NAME = "maops-py"
 EXIT_SUCCESS = 0
 EXIT_FAILURE = 1
 EXIT_USAGE_ERROR = 2
+
+_ALLOWED_TOOL_NAMES: frozenset[str] = frozenset(name for name, _ in TOOL_ALLOWLIST)
+
+
+def _parse_timeout_seconds(raw: str) -> float:
+    """argparse ``type=`` callback: parse and range-check a ``--timeout`` value."""
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"invalid timeout value: {raw!r}") from exc
+    if not is_valid_command_timeout_seconds(value):
+        raise argparse.ArgumentTypeError(
+            f"timeout must be greater than {MIN_COMMAND_TIMEOUT_SECONDS} "
+            f"and at most {MAX_COMMAND_TIMEOUT_SECONDS}"
+        )
+    return value
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -47,6 +86,64 @@ def build_parser() -> argparse.ArgumentParser:
         help="Output format (default: text).",
     )
 
+    config_parser = subparsers.add_parser("config", help="Manage maops-py configuration.")
+    config_subparsers = config_parser.add_subparsers(dest="config_command", required=True)
+
+    config_subparsers.add_parser("path", help="Print the selected configuration file path.")
+
+    config_init_parser = config_subparsers.add_parser(
+        "init", help="Create a documented configuration template."
+    )
+    config_init_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Replace an existing regular configuration file.",
+    )
+
+    config_validate_parser = config_subparsers.add_parser(
+        "validate", help="Validate a configuration file."
+    )
+    config_validate_parser.add_argument(
+        "path",
+        nargs="?",
+        default=None,
+        help="Configuration file to validate (default: the selected path).",
+    )
+
+    config_show_parser = config_subparsers.add_parser(
+        "show", help="Show effective configuration and sources."
+    )
+    config_show_parser.add_argument(
+        "--format",
+        choices=[fmt.value for fmt in OutputFormat],
+        default=None,
+        help="Output format (default: effective output_format).",
+    )
+
+    tools_parser = subparsers.add_parser("tools", help="Read-only external tool inspection.")
+    tools_subparsers = tools_parser.add_subparsers(dest="tools_command", required=True)
+
+    tools_inspect_parser = tools_subparsers.add_parser(
+        "inspect", help="Inspect allowlisted DevOps tool versions."
+    )
+    tools_inspect_parser.add_argument(
+        "tool",
+        nargs="*",
+        help="Tools to inspect (default: all supported tools).",
+    )
+    tools_inspect_parser.add_argument(
+        "--format",
+        choices=[fmt.value for fmt in OutputFormat],
+        default=None,
+        help="Output format (default: effective output_format).",
+    )
+    tools_inspect_parser.add_argument(
+        "--timeout",
+        type=_parse_timeout_seconds,
+        default=None,
+        help="Per-tool timeout in seconds (default: effective command_timeout_seconds).",
+    )
+
     return parser
 
 
@@ -69,6 +166,99 @@ def run_doctor(output_format: OutputFormat) -> int:
     return EXIT_SUCCESS if report.overall is CheckStatus.PASS else EXIT_FAILURE
 
 
+def run_config_path() -> int:
+    """Print the selected configuration file path. Creates nothing."""
+    print(get_config_path())
+    return EXIT_SUCCESS
+
+
+def run_config_init(*, force: bool) -> int:
+    """Create a documented configuration template at the selected path."""
+    path = get_config_path()
+    result = init_config(path, force=force)
+    if result.status is ConfigInitStatus.CREATED:
+        print(result.detail)
+        return EXIT_SUCCESS
+    print(f"Error: {result.detail}", file=sys.stderr)
+    return EXIT_FAILURE
+
+
+def run_config_validate(path_arg: str | None) -> int:
+    """Validate a configuration file. Exits 1 if missing, malformed, or invalid."""
+    path = Path(path_arg) if path_arg is not None else None
+    status, error, resolved_path = validate_config(path)
+    if status is ConfigFileStatus.VALID:
+        print(f"{resolved_path}: valid")
+        return EXIT_SUCCESS
+    detail = error if error is not None else f"configuration file {status.value}"
+    print(f"Error: {resolved_path}: {detail}", file=sys.stderr)
+    return EXIT_FAILURE
+
+
+def run_config_show(format_arg: str | None) -> int:
+    """Show effective configuration and sources. Exits 1 on an invalid config."""
+    report, error = build_show_report()
+    if report is None:
+        print(f"Error: {error}", file=sys.stderr)
+        return EXIT_FAILURE
+
+    if format_arg is not None:
+        output_format = OutputFormat(format_arg)
+    else:
+        output_format = report.values.output_format
+    if output_format is OutputFormat.JSON:
+        print(render_config_show_json(report))
+    else:
+        print(render_config_show_text(report), end="")
+    return EXIT_SUCCESS
+
+
+def run_tools_inspect(
+    tool_names: Sequence[str], format_arg: str | None, timeout_arg: float | None
+) -> int:
+    """Inspect allowlisted DevOps tool versions.
+
+    Exits 2 if any requested tool name is not allowlisted, 1 on overall
+    warn or fail, 0 on overall pass. Tool-name validation is performed
+    here rather than via argparse ``choices=`` because ``choices=`` on a
+    zero-or-more positional produces version-dependent argparse behavior
+    when no tool names are supplied at all: Python 3.11's argparse raises
+    ``ArgumentError: invalid choice: []`` in that case, while 3.12 does
+    not (CHANGELOG.md's [0.2.0] "Fixed" entry has the full explanation).
+    """
+    unsupported = [name for name in tool_names if name not in _ALLOWED_TOOL_NAMES]
+    if unsupported:
+        allowed = ", ".join(sorted(_ALLOWED_TOOL_NAMES))
+        print(
+            f"Error: unsupported tool name(s): {', '.join(unsupported)} (choose from {allowed})",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE_ERROR
+
+    resolution = resolve_effective_config(cli_command_timeout_seconds=timeout_arg)
+    if resolution.config is None:
+        print(f"Error: {resolution.error}", file=sys.stderr)
+        return EXIT_FAILURE
+
+    report = build_inspect_report(
+        tool_names=tool_names,
+        version=get_version(),
+        timeout_seconds=resolution.config.command_timeout_seconds,
+        max_output_bytes=resolution.config.max_output_bytes,
+        config_path=resolution.path,
+    )
+
+    if format_arg is not None:
+        output_format = OutputFormat(format_arg)
+    else:
+        output_format = resolution.config.output_format
+    if output_format is OutputFormat.JSON:
+        print(render_tools_inspect_json(report))
+    else:
+        print(render_tools_inspect_text(report), end="")
+    return EXIT_SUCCESS if report.overall is CheckStatus.PASS else EXIT_FAILURE
+
+
 def _dispatch_version(args: argparse.Namespace) -> int:
     del args
     return run_version()
@@ -78,21 +268,67 @@ def _dispatch_doctor(args: argparse.Namespace) -> int:
     return run_doctor(OutputFormat(args.format))
 
 
+def _dispatch_config_path(args: argparse.Namespace) -> int:
+    del args
+    return run_config_path()
+
+
+def _dispatch_config_init(args: argparse.Namespace) -> int:
+    return run_config_init(force=args.force)
+
+
+def _dispatch_config_validate(args: argparse.Namespace) -> int:
+    return run_config_validate(args.path)
+
+
+def _dispatch_config_show(args: argparse.Namespace) -> int:
+    return run_config_show(args.format)
+
+
+def _dispatch_tools_inspect(args: argparse.Namespace) -> int:
+    return run_tools_inspect(args.tool, args.format, args.timeout)
+
+
 _COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
     "version": _dispatch_version,
     "doctor": _dispatch_doctor,
 }
 
+_CONFIG_COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
+    "path": _dispatch_config_path,
+    "init": _dispatch_config_init,
+    "validate": _dispatch_config_validate,
+    "show": _dispatch_config_show,
+}
+
+_TOOLS_COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
+    "inspect": _dispatch_tools_inspect,
+}
+
+_COMMAND_GROUPS: dict[str, dict[str, Callable[[argparse.Namespace], int]]] = {
+    "config": _CONFIG_COMMANDS,
+    "tools": _TOOLS_COMMANDS,
+}
+
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Shared entry point for the console script and ``python -m`` invocation."""
+    """Shared entry point for the console script and ``python -m`` invocation.
+
+    ``--version`` always short-circuits, even alongside a subcommand: e.g.
+    ``maops-py --version doctor`` prints only the version and exits 0.
+    """
     parser = build_parser()
     args = parser.parse_args(argv)
 
+    if args.version:
+        return run_version()
+
     if args.command is None:
-        if args.version:
-            return run_version()
         parser.print_help(sys.stderr)
         return EXIT_USAGE_ERROR
+
+    if args.command in _COMMAND_GROUPS:
+        subcommand = getattr(args, f"{args.command}_command")
+        return _COMMAND_GROUPS[args.command][subcommand](args)
 
     return _COMMANDS[args.command](args)

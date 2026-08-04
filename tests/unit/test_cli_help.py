@@ -12,3 +12,11 @@ def test_help_exits_zero(capsys: pytest.CaptureFixture[str], flag: str) -> None:
     assert exc_info.value.code == 0
     captured = capsys.readouterr()
     assert "usage" in captured.out.lower()
+
+
+def test_help_lists_all_top_level_commands(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit):
+        main(["--help"])
+    out = capsys.readouterr().out
+    for command in ("doctor", "config", "tools", "version"):
+        assert command in out
