@@ -10,7 +10,12 @@ to fix all verified Critical and High findings and produce a follow-up
 report when such fixes occur.
 
 The original report found **zero Critical findings** and **one High
-finding**. That finding is fixed below.
+finding**. That finding is fixed below. A second, previously-unknown bug
+was subsequently discovered by a real GitHub Actions CI run against an open
+pull request (not by the original review) and is documented and fixed in
+its own section below, since it materially affects this deliverable's
+actual release readiness even though it fell outside the original report's
+scope.
 
 ## High #1 — fixed
 
@@ -76,6 +81,98 @@ invalid real configuration file.
    — no regression, no test added or removed, only the one test's
    environment-construction logic changed.
 
+## Additional fix — Python 3.11 argparse cross-version bug (found by real CI, outside the original review's scope)
+
+**How this was found:** after the original review and the High #1 fix
+above, a real GitHub Actions run on an open pull request
+(`Python Validation / validate (3.11)`, commit `b1a39ca`) failed. The
+original review's own verification was performed entirely against the
+locally available interpreter (Python 3.12.3) — it explicitly could not,
+and did not claim to, verify behavior on 3.11, 3.13, or 3.14 (this is the
+same category of gap the Day 1 review flagged in general terms: "local
+passing on one version isn't evidence for other versions"). This is a
+concrete instance of exactly that risk materializing.
+
+**The bug:** `maops-py tools inspect --format json` (i.e. with no explicit
+tool names) raised `argparse.ArgumentError: invalid choice: []` under
+Python 3.11.15 in CI, while the identical invocation worked correctly under
+the reviewer's local Python 3.12.3. Root cause, traced directly against
+CPython's `argparse.py` source: the `tool` positional
+(`nargs="*"`, `choices=[...]`, no explicit `default=`) was implicitly
+marked `required=True` by argparse's `_get_positional_kwargs()` (a
+positional with `nargs='*'` and no `default` in `kwargs` is forced
+`required`). With zero arguments supplied, this required-but-empty
+positional's resulting empty list was then validated against `choices` —
+and `[] not in ['git', 'docker', ...]` is trivially true, i.e. always
+invalid. Whether this validation step is reached and whether it's
+version-dependent, differs across Python's argparse implementations
+between 3.11 and 3.12 (both branches of this logic were read directly out
+of the installed 3.12 stdlib `argparse.py` during diagnosis, and an
+initial attempted fix — adding an explicit `default=()` — was found to
+*break* the previously-working 3.12 case, confirming the two versions
+genuinely diverge here rather than one simply being stricter).
+
+**Fix applied:**
+
+- `src/maops_pydevops/cli.py` — removed `choices=` from the `tool`
+  positional's `add_argument()` call entirely, sidestepping the
+  version-dependent interaction rather than trying to find a `default=`
+  value that behaves identically on both versions. Added a
+  module-level `_ALLOWED_TOOL_NAMES: frozenset[str]` and moved tool-name
+  validation into `run_tools_inspect()` itself: any requested name not in
+  the allowlist now produces an explicit `Error: unsupported tool name(s):
+  ...` message on stderr and exit code `2`, matching the original
+  contract (unsupported tool names remain a usage error) without relying
+  on argparse's `choices=` mechanism for this particular positional.
+- `tests/unit/test_cli_tools_inspect.py` — updated
+  `test_unsupported_tool_name_exits_two` to assert a plain `int` return of
+  `2` (the new validation path returns from `run_tools_inspect()` rather
+  than argparse raising `SystemExit`), and added two new tests:
+  `test_unsupported_tool_name_never_calls_which_or_run` (confirms
+  validation happens before any tool resolution is attempted) and
+  `test_no_args_after_removing_argparse_choices_still_inspects_all` (a
+  named regression test for the exact scenario that failed in CI — no
+  tool names supplied, `--format json` only).
+- `CHANGELOG.md` — added a `### Fixed` entry under the existing
+  `[0.2.0]` heading (not a new version bump, since v0.2.0 has not been
+  tagged) explaining the bug and fix for anyone reading the release notes.
+
+**Verification:**
+
+1. Directly reproduced the exact failing invocation locally with the
+   pre-fix code (`main(["tools", "inspect", "--format", "json"])` against
+   the built parser) to confirm the root-cause diagnosis before writing any
+   fix.
+2. Confirmed the fix's `tool` argument parses to `[]` for no arguments and
+   to the correct list for explicit tool names, via direct
+   `build_parser().parse_args(...)` calls.
+3. `ruff format --check .` / `ruff check .` — clean.
+4. `mypy src` (strict) — no issues found in 15 source files.
+5. Full suite: `pytest --cov=maops_pydevops --cov-report=term-missing
+   --cov-fail-under=90`:
+   ```
+   261 passed in 153.72s (0:02:33)
+   Total coverage: 99.89%
+   ```
+   `cli.py` itself is at 100% statement and branch coverage after the fix
+   (up from 134 to 140 statements, all covered). Two tests were added net
+   (259 → 261) and one existing test's assertion style changed to match
+   the new (still exit-2) behavior; no test was removed or weakened.
+6. `make build` and `make smoke-install` both rerun end-to-end after the
+   fix — both green, and the exact original failure scenario
+   (`maops-py tools inspect --format json` with no tool names) was run
+   directly against the installed wheel and produced valid JSON with exit
+   `0`.
+
+**What this does not fix:** this verification, like the original review,
+was still only performed on the locally available Python 3.12.3. The fix
+itself removes the *mechanism* that was version-dependent (argparse
+`choices=` validation timing), replacing it with plain Python control flow
+that has no version-dependent behavior to audit — but the only way to
+fully close this class of risk for the whole 3.11–3.14 matrix is a real
+green CI run across all four legs, which remains outside what a local
+review can independently confirm.
+
 ## Medium / Low / Future findings
 
 Unchanged — not required to be fixed per the fix scope (Critical and High
@@ -105,11 +202,26 @@ triage:
 ## Updated readiness recommendation
 
 With High #1 fixed and independently re-verified against the exact failure
-scenario the original finding described, **v0.2.0 is release-ready with no
-remaining Critical or High findings.** The full quality gate
-(`format-check`, `lint`, `type-check`, `coverage`) passes at 259 tests /
-99.89% coverage, unchanged from the original review's numbers except for
-the one corrected test. No further code, test, or packaging defect stands
-between this deliverable and a v0.2.0 tag; the remaining Medium/Low/Future
-items are triage candidates for a subsequent day, not release blockers, per
-the original report's own release-blockers section.
+scenario the original finding described, and with the subsequently
+discovered Python 3.11 argparse cross-version bug also fixed and verified,
+**v0.2.0 is release-ready with no known remaining Critical or High
+findings.** The full quality gate (`format-check`, `lint`, `type-check`,
+`coverage`) passes at 261 tests / 99.89% coverage. No further code, test,
+or packaging defect stands between this deliverable and a v0.2.0 tag; the
+remaining Medium/Low/Future items are triage candidates for a subsequent
+day, not release blockers, per the original report's own release-blockers
+section.
+
+One caveat carried forward from both this document and the original
+report: everything above was verified locally against Python 3.12.3 only.
+The argparse bug this document's second section describes is direct,
+concrete proof that local single-version verification is not a substitute
+for an actual green run across the full 3.11–3.14 CI matrix — the bug was
+invisible to every local check performed during the original review and
+was only caught because a real pull request actually ran on real GitHub
+Actions infrastructure. The fix applied here should make this specific
+class of failure unlikely to recur (the version-dependent mechanism was
+removed, not patched around), but a genuine green run across all four
+matrix legs remains the only complete confirmation, and is recommended
+before treating v0.2.0 as fully validated across its declared Python
+support range.

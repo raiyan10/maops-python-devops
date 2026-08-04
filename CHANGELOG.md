@@ -48,6 +48,18 @@ command. The toolkit remains standard-library-only at runtime.
   ignored once a subcommand was present. `maops-py doctor --version`
   remains an unrecognized-argument usage error (exit `2`), unchanged.
 
+### Fixed
+
+- `maops-py tools inspect` with no explicit tool names (and thus no
+  positional arguments at all) raised `argparse.ArgumentError: invalid
+  choice: []` under Python 3.11's argparse, while working correctly under
+  3.12 — a version-dependent interaction between `nargs="*"`, `choices=`,
+  and an implicitly-`None` default on a required-by-default positional.
+  Tool-name validation is now performed explicitly in
+  `run_tools_inspect()` instead of via argparse `choices=`, which sidesteps
+  the cross-version inconsistency entirely; unsupported tool names still
+  exit `2` with a clear error message.
+
 ## [0.1.0] - 2026-08-03
 
 Initial release of the MAOps Python DevOps Automation Toolkit. Establishes

@@ -133,10 +133,39 @@ def test_report_continues_after_one_tool_fails(
     assert data["tools"][1]["status"] == "pass"
 
 
-def test_unsupported_tool_name_exits_two() -> None:
-    with pytest.raises(SystemExit) as exc_info:
-        main(["tools", "inspect", "helm"])
-    assert exc_info.value.code == 2
+def test_unsupported_tool_name_exits_two(capsys: pytest.CaptureFixture[str]) -> None:
+    exit_code = main(["tools", "inspect", "helm"])
+    assert exit_code == 2
+    assert "helm" in capsys.readouterr().err
+
+
+def test_unsupported_tool_name_never_calls_which_or_run(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def _fail_which(name: str) -> str | None:
+        raise AssertionError("must not resolve any tool when an unsupported name is present")
+
+    monkeypatch.setattr(tools_module.shutil, "which", _fail_which)
+    exit_code = main(["tools", "inspect", "git", "helm"])
+    assert exit_code == 2
+
+
+def test_no_args_after_removing_argparse_choices_still_inspects_all(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Regression test for a Python-version-dependent argparse interaction:
+    # `nargs="*"` combined with `choices=` on this positional produced an
+    # `ArgumentError: invalid choice: []` on Python 3.11 when no tool names
+    # were supplied, even though the identical invocation worked on 3.12.
+    # Tool-name validation is now performed in run_tools_inspect() instead,
+    # so this must keep working regardless of argparse's own version-specific
+    # empty-nargs-with-choices behavior.
+    monkeypatch.setattr(tools_module.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(tools_module, "run_command", _stub_run(0))
+    exit_code = main(["tools", "inspect", "--format", "json"])
+    assert exit_code == 0
+    data = json.loads(capsys.readouterr().out)
+    assert len(data["tools"]) == 5
 
 
 def test_explicit_format_overrides_config(

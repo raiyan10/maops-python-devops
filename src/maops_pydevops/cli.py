@@ -46,6 +46,8 @@ EXIT_SUCCESS = 0
 EXIT_FAILURE = 1
 EXIT_USAGE_ERROR = 2
 
+_ALLOWED_TOOL_NAMES: frozenset[str] = frozenset(name for name, _ in TOOL_ALLOWLIST)
+
 
 def _parse_timeout_seconds(raw: str) -> float:
     """argparse ``type=`` callback: parse and range-check a ``--timeout`` value."""
@@ -127,7 +129,6 @@ def build_parser() -> argparse.ArgumentParser:
     tools_inspect_parser.add_argument(
         "tool",
         nargs="*",
-        choices=[name for name, _ in TOOL_ALLOWLIST],
         help="Tools to inspect (default: all supported tools).",
     )
     tools_inspect_parser.add_argument(
@@ -215,7 +216,25 @@ def run_config_show(format_arg: str | None) -> int:
 def run_tools_inspect(
     tool_names: Sequence[str], format_arg: str | None, timeout_arg: float | None
 ) -> int:
-    """Inspect allowlisted DevOps tool versions. Exits 1 on overall warn or fail."""
+    """Inspect allowlisted DevOps tool versions.
+
+    Exits 2 if any requested tool name is not allowlisted, 1 on overall
+    warn or fail, 0 on overall pass. Tool-name validation is performed
+    here rather than via argparse ``choices=`` because ``choices=`` on a
+    zero-or-more positional produces version-dependent argparse behavior
+    when no tool names are supplied at all: Python 3.11's argparse raises
+    ``ArgumentError: invalid choice: []`` in that case, while 3.12 does
+    not (CHANGELOG.md's [0.2.0] "Fixed" entry has the full explanation).
+    """
+    unsupported = [name for name in tool_names if name not in _ALLOWED_TOOL_NAMES]
+    if unsupported:
+        allowed = ", ".join(sorted(_ALLOWED_TOOL_NAMES))
+        print(
+            f"Error: unsupported tool name(s): {', '.join(unsupported)} (choose from {allowed})",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE_ERROR
+
     resolution = resolve_effective_config(cli_command_timeout_seconds=timeout_arg)
     if resolution.config is None:
         print(f"Error: {resolution.error}", file=sys.stderr)
