@@ -25,19 +25,28 @@ style (docs, CI conventions, agent structure) but no code or architecture.
 src/maops_pydevops/
     __init__.py
     __main__.py
-    cli.py           # argparse construction + dispatch only
-    version.py        # lazy importlib.metadata lookup, never at import time
+    cli.py             # argparse construction + dispatch only
+    version.py          # lazy importlib.metadata lookup, never at import time
     commands/
-        doctor.py      # required + optional checks, build_report()
+        doctor.py        # required + optional checks, build_report()
+        config.py          # config CLI orchestration, build_show_report()
+        tools.py             # allowlisted tool inspection, build_inspect_report()
     core/
-        models.py      # enums + frozen dataclasses
-        output.py      # text/JSON rendering
-        platform.py    # injectable platform/python inspection
+        models.py          # enums + frozen dataclasses (doctor, tools-inspect)
+        config_models.py     # config-domain enums + frozen dataclasses
+        output.py               # text/JSON rendering, all report types
+        platform.py                # injectable platform/python inspection
+        config.py                    # config path/parse/validate/precedence/init
+        runner.py                      # safe subprocess execution layer
 ```
 
 Parser construction (`build_parser()`) must never contain command logic;
 execution lives in separate `run_*` functions. Argparse's own behavior
-(not custom code) handles `-h/--help` and invalid-choice errors.
+(not custom code) handles `-h/--help` and invalid-choice errors. `config`
+and `tools` are two-level command groups (nested `add_subparsers`,
+`required=True` on the leaf level) — `config show`, `tools inspect`,
+etc. `--version` is checked before subcommand dispatch in `main()`, so it
+always short-circuits even alongside a subcommand.
 
 ## Typing policy
 
@@ -59,6 +68,13 @@ execution lives in separate `run_*` functions. Argparse's own behavior
   `monkeypatch` — never depend on the real host's installed toolchain.
 - Tests must be deterministic: no reliance on real network state, host
   environment variables, or non-fixed check ordering.
+- Config tests must never read or write the real invoking user's `HOME`
+  — isolate `HOME`/`XDG_CONFIG_HOME`/`MAOPS_PY_CONFIG_FILE` via
+  `monkeypatch.setenv` or an injected `env=` mapping in every test.
+- Tool-inspection tests must never depend on real git/docker/kubectl/
+  terraform/ansible availability — monkeypatch `shutil.which()` and the
+  runner, or use the deterministic `scripts/smoke/fake-git` stub for
+  subprocess-boundary tests.
 
 ## Security restrictions
 
@@ -66,8 +82,31 @@ No `shell=True`, `os.system`, `eval`, `exec`, `pickle`, `sudo`, service or
 process mutation, network requests, environment-variable dumping, secret
 or token collection, writes outside build/test temp directories, silent
 exception swallowing, import-time side effects, or global logging
-configuration on import. Optional external tool checks use
-`shutil.which()` only — never subprocess execution.
+configuration on import.
+
+`commands/doctor.py`'s optional tool checks use `shutil.which()` only —
+never subprocess execution. `core/runner.py` is the sole, narrowly
+scoped exception: it is the only module permitted to import
+`subprocess`, always with `shell=False`, `stdin=subprocess.DEVNULL`, and
+a configurable timeout, and it is only ever invoked by
+`commands/tools.py` with one of five fixed, hardcoded argv tuples
+(`git`/`docker`/`kubectl`/`terraform`/`ansible` version checks) resolved
+to an absolute path via `shutil.which()` first. No CLI flag, environment
+variable, or configuration key accepts an arbitrary command — Day 2 does
+not expose a general command-execution surface. See
+`docs/subprocess-safety.md` for the full contract.
+
+`core/config.py` is the sole module permitted to read named
+`MAOPS_PY_*`/`XDG_CONFIG_HOME`/`HOME` environment variables or write
+outside a build/test temp directory, and only ever under the resolved
+configuration path (`$XDG_CONFIG_HOME/maops-py/config.toml`, falling back
+to `$HOME/.config/maops-py/config.toml`, overridable via
+`MAOPS_PY_CONFIG_FILE`). No configuration key may hold a secret, token,
+or credential value — an unrecognized key makes the file invalid, never
+silently ignored. `config init` never follows a symbolic link at its
+target path, with or without `--force`, and never modifies an existing
+parent directory's permissions. See `docs/configuration.md` for the full
+contract.
 
 ## Exit-code convention
 

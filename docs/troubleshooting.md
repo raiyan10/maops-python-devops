@@ -50,3 +50,45 @@ CLI boundary instead.
 isn't a full 40-character commit SHA with a trailing `# vX.Y.Z` comment.
 If you bumped an action version, update the SHA (not just the comment)
 to match the new release's actual commit.
+
+## 8. `maops-py config show` / `config validate` reports the config file as missing
+
+This is expected, not an error, the first time you run `maops-py` on a
+machine: no configuration file exists yet, and every value falls back to
+its built-in default. Run `maops-py config init` to create one, or check
+`maops-py config path` to confirm which path is being checked
+(`MAOPS_PY_CONFIG_FILE` > `$XDG_CONFIG_HOME/maops-py/config.toml` >
+`$HOME/.config/maops-py/config.toml`).
+
+## 9. `maops-py config show` / `config validate` exits 1 with an existing file
+
+The file exists but failed validation — malformed TOML, a duplicate key,
+an unknown key, or a value with the wrong type or out of range (see
+`docs/configuration.md` for the full key reference). `config validate`
+prints the specific reason; `config show` deliberately does not print a
+report at all in this case, to avoid ever showing values that don't
+correspond to a genuinely valid file.
+
+## 10. `maops-py config init` refuses to write
+
+`config init` refuses an existing regular file unless `--force` is
+given, and always refuses a symbolic link or a directory at the target
+path — `--force` never overrides those last two. This is intentional:
+see `docs/configuration.md`'s "Secure initialization" section.
+
+## 11. `maops-py tools inspect` shows a tool as `warn` instead of `pass`/`fail`
+
+`warn` means the tool's executable was not found on `PATH` via
+`shutil.which()` — no command was ever attempted for that tool. Install
+the tool or adjust `PATH`; a missing tool never causes the overall result
+to be `fail`, only `warn`, unless another selected tool actually failed
+or timed out.
+
+## 12. `maops-py tools inspect` shows a tool as `fail`
+
+Either the tool's version command exited non-zero, timed out (see
+`--timeout` and `command_timeout_seconds` in `docs/configuration.md`), or
+the executable could not be run due to a permission error. Check the
+`detail` field (or the text-format detail column) for which of these
+applies; `stdout`/`stderr` (when not `null`) contain the tool's own
+output for further diagnosis.

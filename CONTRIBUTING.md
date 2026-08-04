@@ -35,7 +35,9 @@ update both the SHA and the version comment together.
 
 Prefix branches with the type of change:
 
-- `feature/` — new functionality (e.g. `feature/day-2-config-command`)
+- `feature/` — new functionality (e.g. `feature/day-2-config-runner`,
+  which added typed configuration management and the safe subprocess
+  runner)
 - `fix/` — bug fixes
 - `docs/` — documentation-only changes
 - `refactor/` — internal restructuring with no behavior change
@@ -46,12 +48,15 @@ Prefix branches with the type of change:
 See [`.claude/CLAUDE.md`](.claude/CLAUDE.md) for the full typing,
 testing, and security policy. In short: mypy strict, no untyped public
 functions, tests via `monkeypatch` rather than depending on the host
-environment, and no shell execution, network access, or import-time side
-effects anywhere in the package.
+environment, no shell invocation (`shell=True`, `os.system`) anywhere,
+no network access, and no import-time side effects. `core/runner.py` is
+the sole, narrowly scoped module permitted to import `subprocess` at
+all — see [docs/subprocess-safety.md](docs/subprocess-safety.md).
 
 ## Commits and releases
 
 This project follows Conventional Commits where practical (e.g.
-`feat(day-2): add config command`). Commits, pushes, tags, and releases
+`feat(day-2): add typed configuration and a safe subprocess runner`).
+Commits, pushes, tags, and releases
 are performed by the repository owner — automated tooling and AI
 assistants must not perform these without explicit instruction.

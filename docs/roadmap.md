@@ -19,14 +19,41 @@
   workflow with SHA-pinned actions.
 - Test suite with unit and integration coverage at or above 90%.
 
-## Post-v0.1.0 possibilities
+## Completed in v0.2.0
+
+- Typed TOML configuration (`tomllib`, stdlib), with a default path of
+  `$XDG_CONFIG_HOME/maops-py/config.toml` falling back to
+  `$HOME/.config/maops-py/config.toml`, overridable via
+  `MAOPS_PY_CONFIG_FILE`, and CLI/environment/file/default precedence
+  resolution with full per-field source attribution.
+- `maops-py config path` / `config init [--force]` / `config validate
+  [PATH]` / `config show [--format text|json]` — secure, atomic
+  configuration management (mode `0600`, symlink/directory refusal,
+  `os.replace`-based atomic installation).
+- `src/maops_pydevops/core/runner.py` — a reusable, safe subprocess
+  execution layer (`shell=False`, fixed noninteractive child environment,
+  configurable timeout, output truncation). Not exposed as an arbitrary
+  command-execution CLI.
+- `maops-py tools inspect [TOOL...] [--format text|json] [--timeout
+  SECONDS]` — allowlisted, read-only version checks for `git`, `docker`,
+  `kubectl`, `terraform`, and `ansible`.
+- `--version` now always short-circuits, even alongside a subcommand,
+  resolving the Day 1 `--version doctor` precedence quirk.
+
+Not yet done: `doctor` itself does not read configuration to filter which
+optional tools it checks — the configuration system introduced in v0.2.0
+is deliberately scoped to `command_timeout_seconds`, `max_output_bytes`,
+and `output_format` only.
+
+## Post-v0.2.0 possibilities
 
 These are not committed, scheduled, or designed yet — listed only as
 plausible next steps, to be scoped on their own day:
 
-- Additional read-only diagnostic or reporting commands beyond `doctor`.
+- Additional read-only diagnostic or reporting commands beyond `doctor`
+  and `tools inspect`.
 - Structured logging/verbosity flags (`-v`/`-q`) for the CLI.
-- A configuration file for customizing which optional tools `doctor`
+- Configuration support for customizing which optional tools `doctor`
   checks for.
 - Packaging distribution (PyPI publish workflow) once the CLI surface is
   stable enough to version externally.
