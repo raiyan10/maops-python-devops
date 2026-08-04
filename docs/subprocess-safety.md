@@ -40,9 +40,14 @@ with one of five **fixed, hardcoded** argv tuples:
 with that absolute path — the rest of the fixed argv is never altered.
 There is no flag, environment variable, or configuration key anywhere in
 this package that lets a caller supply an arbitrary command, arbitrary
-arguments, or a different tool than these five. Unsupported tool names
-are rejected by argparse's `choices=` validation before any code in this
-package runs (exit `2`).
+arguments, or a different tool than these five. Unsupported tool names are
+rejected in `run_tools_inspect()` against the fixed allowlist, before any
+tool resolution or execution is attempted (exit `2`). This check is
+ordinary Python code rather than argparse `choices=` validation, because
+`choices=` on the tool positional interacted with `nargs="*"`'s
+implicit-`required` behavior in a way that differed between Python 3.11
+and 3.12 — see `CHANGELOG.md`'s `[0.2.0]` "Fixed" entry for the full
+root-cause explanation.
 
 ## Timeout behavior
 

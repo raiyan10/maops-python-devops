@@ -42,11 +42,18 @@ src/maops_pydevops/
 
 Parser construction (`build_parser()`) must never contain command logic;
 execution lives in separate `run_*` functions. Argparse's own behavior
-(not custom code) handles `-h/--help` and invalid-choice errors. `config`
-and `tools` are two-level command groups (nested `add_subparsers`,
-`required=True` on the leaf level) — `config show`, `tools inspect`,
-etc. `--version` is checked before subcommand dispatch in `main()`, so it
-always short-circuits even alongside a subcommand.
+(not custom code) handles `-h/--help` and invalid-choice errors for every
+`choices=`-backed argument, with one deliberate exception: `tools
+inspect`'s `tool` positional validates against the allowlist in
+`run_tools_inspect()` rather than via argparse `choices=`, because that
+combination (`nargs="*"` + `choices=` + no explicit `default=`) had
+version-dependent behavior between Python 3.11 and 3.12 — do not
+reintroduce `choices=` on that positional without re-verifying against
+the full 3.11–3.14 matrix. `config` and `tools` are two-level command
+groups (nested `add_subparsers`, `required=True` on the leaf level) —
+`config show`, `tools inspect`, etc. `--version` is checked before
+subcommand dispatch in `main()`, so it always short-circuits even
+alongside a subcommand.
 
 ## Typing policy
 

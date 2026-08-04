@@ -44,7 +44,13 @@ flags and subcommands, runs no logic) from **execution**
 — do the actual work and return an exit code). `main()` parses arguments,
 then dispatches through a small `dict[str, Callable]` command table keyed
 by subcommand name. Argparse's own behavior (not custom code) handles
-`-h/--help` and invalid-choice errors.
+`-h/--help` and invalid-choice errors for every `choices=`-backed option
+and subcommand. The one exception is `tools inspect`'s `tool` positional:
+tool-name validation happens in `run_tools_inspect()` itself, not via
+argparse `choices=`, because that combination proved to have
+version-dependent behavior between Python 3.11 and 3.12 (see
+`CHANGELOG.md`'s `[0.2.0]` "Fixed" entry). It still produces exit `2` for
+an unsupported name.
 
 `config` and `tools` are two-level command groups (`config show`, `tools
 inspect`, etc.) — the first nested subparsers in this codebase. Each
