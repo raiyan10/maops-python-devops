@@ -92,3 +92,29 @@ the executable could not be run due to a permission error. Check the
 `detail` field (or the text-format detail column) for which of these
 applies; `stdout`/`stderr` (when not `null`) contain the tool's own
 output for further diagnosis.
+
+## 13. `maops-py inventory system`'s `distribution`/`memory`/`uptime` fields are `null`
+
+`distribution` is only available where `platform.freedesktop_os_release()`
+succeeds — typically Linux with a `/etc/os-release` file; it's `null`
+(with `available: false`) on macOS, Windows, and minimal Linux images
+without that file. `memory` and `uptime` are Linux-only by nature of
+their data sources (`/proc/meminfo`, `/proc/uptime`) and are `null` on
+every other platform. In every case, check the report's `issues` array
+for the matching `component` and its `detail` for the specific reason —
+this is expected, degraded-but-valid behavior, never an error, and never
+affects the command's exit code (always `0` for a successfully-produced
+report). See `docs/inventory.md` for the complete field-level contract.
+
+## 14. `maops-py inventory filesystem` exits `1`
+
+This means the scan **root** itself could not be classified at all — it
+doesn't exist, or the invoking user cannot access it (check the printed
+`Error:` message, which preserves the path you supplied exactly as
+typed). This is the *only* condition that causes `inventory filesystem`
+to exit non-zero: a permission-denied subdirectory, a file that
+disappeared mid-scan, or any other per-entry issue *inside* an otherwise
+valid tree is recorded in the report's `issues` array and sets `overall`
+to `"warn"`, but never changes the exit code. See
+`docs/filesystem-inventory-safety.md` for the full race-handling
+contract.

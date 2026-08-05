@@ -5,6 +5,102 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-08-05
+
+Adds typed, structured, read-only system and filesystem inventory,
+complementing `doctor` (environment usability) and `tools inspect` (fixed
+external-tool version checks). Inventory collection is pure local
+introspection: no subprocess execution, no network or socket use, and no
+environment-variable reads. Also resolves the majority of the Day 2
+engineering-review findings. The toolkit remains standard-library-only at
+runtime.
+
+### Added
+
+- `maops-py inventory system [--format text|json]` — host, OS,
+  distribution, Python, CPU, memory, and uptime facts collected via
+  `platform`/`os` introspection only. Optional data (Linux distribution
+  metadata, CPU load averages, `/proc/meminfo`, `/proc/uptime`) degrades to
+  an explicit `null` plus a structured warning issue when unavailable or
+  malformed, rather than being fabricated or omitted; the command's exit
+  code reflects only whether a report could be produced at all, never
+  individual optional-field warnings (see `docs/inventory.md`).
+- `maops-py inventory filesystem [PATH] [--format text|json] [--max-depth
+  N] [--max-entries N] [--top N]` — a bounded, deterministic, read-only
+  filesystem tree summary. Never follows symbolic links, never crosses
+  mount points (`st_dev` boundary), never reads file content or computes
+  hashes, and never invokes an external command. Defaults: current working
+  directory, max depth `2`, max entries `10000`, top `10` largest files.
+  Per-entry race conditions (`FileNotFoundError`, `PermissionError`,
+  `NotADirectoryError`) become structured issues rather than aborting the
+  scan; only a nonexistent or unreadable root is an operational failure
+  (see `docs/filesystem-inventory-safety.md`).
+- New typed models in `core/inventory_models.py` (`InventoryIssue`,
+  `HostInfo`, `DistributionInfo`, `SystemPythonInfo`, `CpuInfo`,
+  `MemoryInfo`, `UptimeInfo`, `SystemInventoryReport`,
+  `FilesystemScanOptions`, `FilesystemScanSummary`, `LargestFileEntry`,
+  `FilesystemInventoryReport`), following the existing frozen-dataclass,
+  explicit-serialization, tuple-collection conventions.
+- New documentation: `docs/inventory.md`, `docs/filesystem-inventory-safety.md`.
+
+### Changed
+
+- `docs/subprocess-safety.md` now documents exit-code and warning
+  semantics across every command: `doctor`'s optional-tool warnings never
+  affect its exit code; `tools inspect`'s warnings do (a single missing
+  requested tool fails the whole invocation, by original design);
+  `inventory system`/`inventory filesystem` warnings never affect their
+  exit code (only a failure that prevents a meaningful report at all
+  does). This clarifies a previously undocumented divergence between
+  `doctor` and `tools inspect` (Day 2 finding).
+- `--version`'s documented short-circuit behavior is narrowed to describe
+  its actual, always-true contract precisely: it short-circuits whenever
+  `parser.parse_args()` succeeds; an incomplete two-level command group
+  given with no leaf subcommand (`config`, `tools`, or the new
+  `inventory`) is a usage error argparse raises during parsing itself,
+  before `--version` is ever inspected, and always exits `2` regardless of
+  `--version`'s position on the command line. Previous release notes and
+  docs stated an unconditional short-circuit without this exception (Day 2
+  finding).
+- Configuration validation error messages for `command_timeout_seconds`
+  and `max_output_bytes` now name the actual received type (e.g. "not
+  string", "not a list", "not a float") instead of always saying "not
+  boolean," which was misleading for non-boolean wrong-type values. The
+  message for genuinely boolean values is unchanged. Exit codes and valid
+  behavior are unaffected (Day 2 finding).
+
+### Fixed
+
+- `tests/integration/test_release_permissions.py` and
+  `test_release_artifacts.py` no longer build into the shared repository
+  `dist/` directory (which `make build` empties via `rm -rf` on every
+  invocation); both now build into an isolated, `tmp_path`-scoped output
+  directory via `python -m build --outdir`, eliminating a race under any
+  concurrent build/test run against the same working tree. `make build`
+  and CI's `make release-check` are unaffected (Day 2 finding).
+- JSON field-type coverage for `tools inspect` and `config show` is now
+  exhaustive: every field of `ToolInspectionResult`, its `configuration`
+  block, and `ConfigShowReport`'s `values`/`sources` blocks is now
+  asserted for type (previously several fields, including `status`,
+  `stderr`, `stdout_truncated`, and `sources.command_timeout_seconds`,
+  were unchecked). The two new inventory report types ship with the same
+  completeness standard from day one (Day 2 finding).
+- `tests/unit/test_no_network_runner.py`'s
+  `test_tools_inspect_makes_no_network_calls` now resolves a real,
+  on-disk stub executable so the real `run_command()` subprocess path
+  genuinely executes under the socket guard, rather than short-circuiting
+  on a missing-executable branch that never reached subprocess execution
+  at all (Day 2 finding).
+- Added `MANIFEST.in` (`prune src/*.egg-info`), removing five of the seven
+  `src/maops_pydevops.egg-info/` entries that previously leaked into the
+  sdist (`PKG-INFO`, `dependency_links.txt`, `entry_points.txt`,
+  `requires.txt`, `top_level.txt`). The remaining `SOURCES.txt` (and its
+  containing directory) is unconditionally force-included by setuptools'
+  own sdist/egg_info integration — verified empirically to survive even
+  an explicit `MANIFEST.in` `exclude` directive targeting it directly — and
+  is standard, required metadata for every setuptools-built sdist, not a
+  defect (Day 2 finding, carried forward two releases; now closed).
+
 ## [0.2.0] - 2026-08-04
 
 Adds typed configuration management and a reusable, safe subprocess execution

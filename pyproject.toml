@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "maops-pydevops"
-version = "0.2.0"
+version = "0.3.0"
 description = "MAOps Python DevOps Automation Toolkit — structured, read-only diagnostics and operational reporting."
 readme = "README.md"
 license = "MIT"

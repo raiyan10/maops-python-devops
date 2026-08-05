@@ -112,3 +112,30 @@ def test_max_output_bytes_above_maximum_is_rejected() -> None:
 def test_max_output_bytes_must_be_an_integer_not_float() -> None:
     result = validate_config_schema({"max_output_bytes": 2048.5})
     assert result.valid is False
+    assert result.error is not None
+    assert "float" in result.error
+    assert "boolean" not in result.error
+
+
+def test_command_timeout_seconds_wrong_type_string_names_string() -> None:
+    result = validate_config_schema({"command_timeout_seconds": "10"})
+    assert result.valid is False
+    assert result.error is not None
+    assert "string" in result.error
+    assert "boolean" not in result.error
+
+
+def test_command_timeout_seconds_wrong_type_list_names_list() -> None:
+    result = validate_config_schema({"command_timeout_seconds": [1, 2]})
+    assert result.valid is False
+    assert result.error is not None
+    assert "a list" in result.error
+    assert "boolean" not in result.error
+
+
+def test_max_output_bytes_wrong_type_string_names_string() -> None:
+    result = validate_config_schema({"max_output_bytes": "65536"})
+    assert result.valid is False
+    assert result.error is not None
+    assert "string" in result.error
+    assert "boolean" not in result.error

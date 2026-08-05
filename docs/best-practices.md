@@ -11,7 +11,12 @@ dispatch functions and never leaks into `commands/` or `core/`.
 
 `core/models.py` dataclasses are `frozen=True`. `DoctorReport.checks` is
 a `tuple`, not a `list`, reinforcing that a report is a fixed snapshot
-once built.
+once built. `core/inventory_models.py` follows the identical pattern —
+`SystemInventoryReport.issues` and `FilesystemInventoryReport.issues`/
+`largest_files` are all `tuple`s, never `list`s, even though the
+filesystem scanner builds them up incrementally with mutable local lists
+internally (`core/filesystem_inventory.py`'s private `_ScanState`) before
+freezing them into the returned report.
 
 ## 3. Explicit serialization
 
@@ -22,21 +27,32 @@ fields serialize via `.value` rather than the enum object.
 
 ## 4. Stdlib-only runtime
 
-v0.2.0 still has zero runtime dependencies — `argparse`, `contextlib`,
-`dataclasses`, `enum`, `importlib.metadata`, `json`, `os`, `pathlib`,
-`platform`, `shutil`, `stat`, `subprocess` (confined to `core/runner.py`
-only), `sys`, `tempfile`, `time`, and `tomllib` (standard library since
-Python 3.11, matching this project's floor). Development tooling
-(`pytest`, `ruff`, `mypy`, `build`) lives in the `dev` optional-dependency
-group, never in runtime `dependencies`.
+v0.3.0 still has zero runtime dependencies — `argparse`, `contextlib`,
+`dataclasses`, `enum`, `importlib.metadata`, `json`, `math`, `os`,
+`pathlib`, `platform`, `shutil`, `stat`, `subprocess` (confined to
+`core/runner.py` only), `sys`, `tempfile`, `time`, and `tomllib`
+(standard library since Python 3.11, matching this project's floor).
+`inventory system`/`inventory filesystem` add no new runtime
+dependency — `platform.freedesktop_os_release()` and `os.getloadavg()`
+are both plain stdlib, and `math` (for uptime's NaN/infinite rejection)
+is stdlib too. Development tooling (`pytest`, `ruff`, `mypy`, `build`)
+lives in the `dev` optional-dependency group, never in runtime
+`dependencies`.
 
 ## 5. Deterministic, isolated tests
 
 Required and optional checks run in a fixed order every time. Anything
 host-dependent (installed Python version, OS family, presence of
-git/docker/kubectl/terraform/ansible) is simulated via dependency
-injection or `monkeypatch` rather than relying on what happens to be
-installed on the machine running the tests.
+git/docker/kubectl/terraform/ansible, real `/proc/meminfo`/`/proc/uptime`
+content, real CPU count, real filesystem race conditions) is simulated
+via dependency injection or `monkeypatch` rather than relying on what
+happens to be installed on, or racing against, the machine running the
+tests. `core/system_inventory.py`'s `gather_*` functions accept
+injectable overrides for every data source (including a raw
+`meminfo_lines`/`uptime_line` seam so tests can supply fabricated procfs
+content directly, never a real file); `core/filesystem_inventory.py`'s
+tests always scan a `tmp_path`-scoped fixture tree, never the real
+repository tree.
 
 ## 6. No premature abstraction
 
@@ -69,5 +85,10 @@ tuples selected by `commands/tools.py` — Day 2 does not expose an
 arbitrary command-execution CLI. `core/config.py` is the only module
 permitted to read named `MAOPS_PY_*`/`XDG_CONFIG_HOME`/`HOME` environment
 variables or write outside a build/test temp directory, and only ever
-under the resolved configuration path. See `.claude/CLAUDE.md` for the
+under the resolved configuration path. `core/system_inventory.py` and
+`core/filesystem_inventory.py` never import `subprocess` or `socket`,
+never read named environment variables, and the filesystem scanner never
+reads file content, computes a hash, follows a symbolic link, or crosses
+a mount-point boundary — see `docs/filesystem-inventory-safety.md` for
+the complete traversal contract. See `.claude/CLAUDE.md` for the
 authoritative list.

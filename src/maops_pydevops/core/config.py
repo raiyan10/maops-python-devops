@@ -89,6 +89,20 @@ def _is_int_non_bool(value: object) -> TypeGuard[int]:
     return isinstance(value, int) and not isinstance(value, bool)
 
 
+_TYPE_NAMES: dict[type, str] = {
+    bool: "boolean",
+    str: "string",
+    list: "a list",
+    dict: "a table",
+    float: "a float",
+}
+
+
+def _type_name(value: object) -> str:
+    """Describe ``value``'s actual type for a validation error message."""
+    return _TYPE_NAMES.get(type(value), type(value).__name__)
+
+
 def validate_config_schema(raw: dict[str, object]) -> SchemaValidationResult:
     """Validate a parsed TOML document against the supported configuration schema."""
     unknown_keys = set(raw.keys()) - KNOWN_CONFIG_KEYS
@@ -117,7 +131,9 @@ def validate_config_schema(raw: dict[str, object]) -> SchemaValidationResult:
             return SchemaValidationResult(
                 valid=False,
                 values=None,
-                error="command_timeout_seconds must be numeric, not boolean",
+                error=(
+                    f"command_timeout_seconds must be numeric, not {_type_name(timeout_candidate)}"
+                ),
             )
         if not is_valid_command_timeout_seconds(timeout_candidate):
             return SchemaValidationResult(
@@ -134,7 +150,9 @@ def validate_config_schema(raw: dict[str, object]) -> SchemaValidationResult:
         bytes_candidate = raw["max_output_bytes"]
         if not _is_int_non_bool(bytes_candidate):
             return SchemaValidationResult(
-                valid=False, values=None, error="max_output_bytes must be an integer, not boolean"
+                valid=False,
+                values=None,
+                error=f"max_output_bytes must be an integer, not {_type_name(bytes_candidate)}",
             )
         if not (MIN_MAX_OUTPUT_BYTES <= bytes_candidate <= MAX_MAX_OUTPUT_BYTES):
             return SchemaValidationResult(

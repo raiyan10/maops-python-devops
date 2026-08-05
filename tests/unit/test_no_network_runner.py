@@ -19,17 +19,27 @@ def _isolated_config_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
 
 
 def test_tools_inspect_makes_no_network_calls(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    # which() resolves to a real, on-disk stub so run_command() genuinely
+    # executes under the socket guard, rather than short-circuiting on a
+    # missing-executable branch that never reaches subprocess execution at
+    # all (see docs/engineering-reviews/day-02-release-readiness.md, Low #8).
     def _fail(*args: object, **kwargs: object) -> None:
         raise AssertionError("network access attempted")
 
     monkeypatch.setattr(socket, "socket", _fail)
     monkeypatch.setattr(socket, "create_connection", _fail)
-    monkeypatch.setattr(tools_module.shutil, "which", lambda name: None)
+
+    stub = tmp_path / "git"
+    stub.write_text('#!/bin/sh\necho "git version 2.99.0"\n', encoding="utf-8")
+    stub.chmod(stub.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+    monkeypatch.setattr(tools_module.shutil, "which", lambda name: str(stub))
 
     exit_code = main(["tools", "inspect", "git", "--format", "json"])
-    assert exit_code == 1
+    assert exit_code == 0
+    data = json.loads(capsys.readouterr().out)
+    assert data["tools"][0]["status"] == "pass"
 
 
 def test_terraform_checkpoint_is_disabled_end_to_end(

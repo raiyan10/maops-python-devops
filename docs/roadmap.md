@@ -45,15 +45,40 @@ optional tools it checks — the configuration system introduced in v0.2.0
 is deliberately scoped to `command_timeout_seconds`, `max_output_bytes`,
 and `output_format` only.
 
-## Post-v0.2.0 possibilities
+## Completed in v0.3.0
+
+- `maops-py inventory system [--format text|json]` — typed, structured
+  host/OS/distribution/Python/CPU/memory/uptime facts, collected via pure
+  `platform`/`os` introspection (no subprocess, no network/socket use).
+  Optional fields degrade to explicit `null` plus a structured warning
+  issue rather than being fabricated or omitted; the exit code is
+  deliberately decoupled from that degradation (see
+  `docs/subprocess-safety.md`).
+- `maops-py inventory filesystem [PATH] [--format text|json] [--max-depth
+  N] [--max-entries N] [--top N]` — a bounded, deterministic, read-only
+  filesystem tree summary. Never follows symbolic links, never crosses
+  mount points, never reads file content or computes a hash (see
+  `docs/filesystem-inventory-safety.md`).
+- Several Day 2 engineering-review findings resolved: an isolated,
+  race-free build step for the release-artifact test suite; exhaustive
+  JSON field-type coverage for every report type; type-aware
+  configuration validation error messages; a `MANIFEST.in` that removes
+  the sdist egg-info leak down to the one file setuptools' own
+  sdist/egg_info integration force-includes unconditionally; and
+  documented (not structurally changed) `--version` short-circuit and
+  cross-command exit-code semantics.
+
+## Post-v0.3.0 possibilities
 
 These are not committed, scheduled, or designed yet — listed only as
 plausible next steps, to be scoped on their own day:
 
-- Additional read-only diagnostic or reporting commands beyond `doctor`
-  and `tools inspect`.
 - Structured logging/verbosity flags (`-v`/`-q`) for the CLI.
 - Configuration support for customizing which optional tools `doctor`
   checks for.
 - Packaging distribution (PyPI publish workflow) once the CLI surface is
   stable enough to version externally.
+- A `--follow-symlinks`/`--cross-filesystem` opt-in flag for `inventory
+  filesystem`, should a real use case for it emerge — the current release
+  deliberately hardcodes both to their safest values with no CLI
+  override.

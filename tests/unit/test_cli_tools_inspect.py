@@ -253,13 +253,22 @@ def test_json_field_types(
     main(["tools", "inspect", "git", "--format", "json"])
     data = json.loads(capsys.readouterr().out)
     assert isinstance(data["version"], str)
+    assert isinstance(data["configuration"]["path"], str)
     assert isinstance(data["configuration"]["command_timeout_seconds"], float)
     assert isinstance(data["configuration"]["max_output_bytes"], int)
+    assert data["overall"] in ("pass", "warn", "fail")
     tool = data["tools"][0]
+    assert isinstance(tool["name"], str)
+    assert isinstance(tool["executable"], str)
+    assert tool["status"] in ("pass", "warn", "fail")
     assert isinstance(tool["exit_code"], int)
     assert isinstance(tool["timed_out"], bool)
     assert isinstance(tool["duration_ms"], int)
     assert isinstance(tool["stdout"], str)
+    assert isinstance(tool["stderr"], str)
+    assert isinstance(tool["stdout_truncated"], bool)
+    assert isinstance(tool["stderr_truncated"], bool)
+    assert isinstance(tool["detail"], str)
 
 
 def test_json_null_fields_for_missing_tool(
@@ -273,6 +282,9 @@ def test_json_null_fields_for_missing_tool(
     assert tool["exit_code"] is None
     assert tool["duration_ms"] is None
     assert tool["stdout"] is None
+    assert tool["stderr"] is None
+    assert tool["stdout_truncated"] is None
+    assert tool["stderr_truncated"] is None
     assert tool["timed_out"] is False
 
 
