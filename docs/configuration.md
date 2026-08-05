@@ -14,6 +14,15 @@ order:
 Run `maops-py config path` to print the path that will actually be used,
 without creating or reading anything.
 
+This configuration file is consumed by `tools inspect` (for
+`command_timeout_seconds`, `max_output_bytes`, and a default
+`--format`) and `config show` (which reports it back). `doctor` and
+both `inventory` commands (`inventory system`, `inventory filesystem`)
+never read it: their `--format` always defaults to `text`, so an
+invalid or malformed configuration file never affects their exit code.
+See `docs/inventory.md` for why this was deliberately chosen for
+`inventory` specifically.
+
 ## Supported keys
 
 | Key | Type | Default | Constraints |

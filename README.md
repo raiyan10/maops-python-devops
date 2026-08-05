@@ -17,9 +17,10 @@ automation.
 ## Scope
 
 Day 1 / v0.1.0 delivered the packaging, CLI, and diagnostics foundation.
-Day 2 / v0.2.0 adds typed configuration management and a reusable, safe
+Day 2 / v0.2.0 added typed configuration management and a reusable, safe
 subprocess execution layer, demonstrated through an allowlisted,
-read-only tool-inspection command:
+read-only tool-inspection command. Day 3 / v0.3.0 adds typed, structured,
+read-only system and filesystem inventory:
 
 - A `src`-layout, stdlib-only Python package (`maops_pydevops`) —
   `tomllib` (standard library since Python 3.11) is the only addition,
@@ -37,6 +38,13 @@ read-only tool-inspection command:
   truncation). See [docs/subprocess-safety.md](docs/subprocess-safety.md)
   for the full safety boundary — Day 2 does not expose an arbitrary
   command-execution CLI.
+- `inventory system` / `inventory filesystem` — typed host/OS/CPU/
+  memory/uptime facts and a bounded, deterministic filesystem tree
+  summary, collected via pure `platform`/`os` introspection with no
+  subprocess or network/socket use. See
+  [docs/inventory.md](docs/inventory.md) and
+  [docs/filesystem-inventory-safety.md](docs/filesystem-inventory-safety.md)
+  for the complete field and safety contracts.
 - A full local quality gate (formatting, linting, strict typing, tests,
   coverage, build, isolated smoke-install) and a matching CI workflow.
 
@@ -89,23 +97,38 @@ maops-py tools inspect
 maops-py tools inspect git
 maops-py tools inspect git kubectl --format json
 
+maops-py inventory system
+maops-py inventory system --format json
+maops-py inventory filesystem
+maops-py inventory filesystem .
+maops-py inventory filesystem . --max-depth 1 --top 5 --format json
+
 # Equivalent module invocation
 python -m maops_pydevops --version
 python -m maops_pydevops doctor --format json
 python -m maops_pydevops config show --format json
+python -m maops_pydevops inventory system --format json
 ```
 
 Exit codes: `0` success, `1` operational or required-check failure, `2`
 CLI usage error (unknown command, invalid option value, no subcommand).
-`--version` always short-circuits, even alongside a subcommand — e.g.
-`maops-py --version doctor` prints only the version and exits `0`.
+`--version` short-circuits whenever argument parsing itself succeeds —
+e.g. `maops-py --version doctor` prints only the version and exits `0` —
+but **not** for an incomplete two-level group given with no leaf
+subcommand: `maops-py --version tools` still exits `2`, since argparse's
+own required-subcommand validation runs before `--version` is ever
+inspected. Which `warn`-level conditions affect the exit code also
+differs by command (`doctor`'s optional-tool warnings never do,
+`tools inspect`'s do, `inventory`'s never do) — see
+[docs/subprocess-safety.md](docs/subprocess-safety.md) for the complete
+breakdown.
 
 ### Doctor: text output
 
 ```
 $ maops-py doctor
 MAOps Python DevOps Toolkit - Doctor Report
-Version:              0.2.0
+Version:              0.3.0
 Python version:       3.12.3
 Python executable:    /home/user/.venv/bin/python
 Operating system:     Linux 6.8.0
@@ -138,7 +161,7 @@ $ maops-py doctor --format json | python -m json.tool
 
 ```json
 {
-  "version": "0.2.0",
+  "version": "0.3.0",
   "python": {
     "version": "3.12.3",
     "executable": "/home/user/.venv/bin/python",
@@ -217,7 +240,7 @@ model and every supported key.
 ```bash
 $ maops-py tools inspect git kubectl
 MAOps Python DevOps Toolkit - Tool Inspection
-Version:     0.2.0
+Version:     0.3.0
 Config path: /home/user/.config/maops-py/config.toml
 
 Tools:
@@ -233,7 +256,7 @@ $ maops-py tools inspect git --format json | python -m json.tool
 
 ```json
 {
-    "version": "0.2.0",
+    "version": "0.3.0",
     "configuration": {
         "path": "/home/user/.config/maops-py/config.toml",
         "command_timeout_seconds": 10.0,
@@ -264,6 +287,157 @@ inspected, and only via a fixed, read-only version-check argv per tool —
 [docs/subprocess-safety.md](docs/subprocess-safety.md) for the complete
 safety boundary.
 
+### Inventory: system
+
+```bash
+$ maops-py inventory system
+MAOps Python DevOps Toolkit - System Inventory
+Version:               0.3.0
+Hostname:              myhost
+OS:                    Linux 6.8.0
+OS version:            #1 SMP ...
+Machine:               x86_64
+Distribution:          Ubuntu 24.04
+Python:                3.12.3 (CPython)
+Python executable:     /home/user/.venv/bin/python
+CPU logical count:     8
+Load average (1/5/15): 0.12 0.08 0.04
+Memory used:           50.0% of 17179869184 bytes
+Uptime:                12345.67s
+
+Issues:
+
+Overall status: PASS
+```
+
+```bash
+$ maops-py inventory system --format json | python -m json.tool
+```
+
+```json
+{
+    "version": "0.3.0",
+    "host": {
+        "hostname": "myhost",
+        "os_family": "Linux",
+        "os_release": "6.8.0",
+        "os_version": "#1 SMP ...",
+        "machine": "x86_64"
+    },
+    "distribution": {
+        "id": "ubuntu",
+        "name": "Ubuntu",
+        "version_id": "24.04",
+        "available": true
+    },
+    "python": {
+        "version": "3.12.3",
+        "implementation": "CPython",
+        "executable": "/home/user/.venv/bin/python"
+    },
+    "cpu": {
+        "logical_count": 8,
+        "load_average_1m": 0.12,
+        "load_average_5m": 0.08,
+        "load_average_15m": 0.04
+    },
+    "memory": {
+        "available": true,
+        "total_bytes": 17179869184,
+        "available_bytes": 8589934592,
+        "used_bytes": 8589934592,
+        "used_percent": 50.0
+    },
+    "uptime": {
+        "available": true,
+        "seconds": 12345.67
+    },
+    "issues": [],
+    "overall": "pass"
+}
+```
+
+Optional fields that could not be collected (e.g. `distribution` on a
+non-Linux host) become explicit JSON `null` plus a warning entry in
+`issues` — never fabricated data. This command always exits `0` for a
+successfully-produced report, regardless of `overall` being `pass` or
+`warn`. See [docs/inventory.md](docs/inventory.md) for the complete field
+reference.
+
+### Inventory: filesystem
+
+```bash
+$ maops-py inventory filesystem . --max-depth 1 --top 5
+MAOps Python DevOps Toolkit - Filesystem Inventory
+Version:            0.3.0
+Root:               /home/user/project
+Max depth:          1
+Max entries:        10000
+Scanned entries:    12
+Directories:        3
+Files:              9
+Symlinks:           0
+Other:              0
+Total file bytes:   45210
+Skipped entries:    0
+Inaccessible:       0
+Different fs:       0
+Max depth reached:  true
+Truncated:          false
+
+Largest files:
+         10615  CHANGELOG.md
+          9910  README.md
+          2898  Makefile
+
+Issues:
+
+Overall status: PASS
+```
+
+```bash
+$ maops-py inventory filesystem . --max-depth 1 --top 5 --format json | python -m json.tool
+```
+
+```json
+{
+    "version": "0.3.0",
+    "root": "/home/user/project",
+    "options": {
+        "max_depth": 1,
+        "max_entries": 10000,
+        "top": 5,
+        "follow_symlinks": false,
+        "same_filesystem": true
+    },
+    "summary": {
+        "scanned_entries": 12,
+        "directories": 3,
+        "files": 9,
+        "symlinks": 0,
+        "other": 0,
+        "total_file_bytes": 45210,
+        "skipped_entries": 0,
+        "inaccessible_entries": 0,
+        "different_filesystem_entries": 0
+    },
+    "largest_files": [
+        {"path": "/home/user/project/CHANGELOG.md", "relative_path": "CHANGELOG.md", "size_bytes": 10615, "modified_ns": 1785900000000000000}
+    ],
+    "issues": [],
+    "max_depth_reached": true,
+    "truncated": false,
+    "overall": "pass"
+}
+```
+
+Never follows symbolic links, never crosses mount points, never reads
+file content or computes a hash — see
+[docs/filesystem-inventory-safety.md](docs/filesystem-inventory-safety.md)
+for the complete safety boundary. Only a root path that cannot be
+classified at all (nonexistent or inaccessible) causes a non-zero exit;
+recoverable per-entry issues during traversal never do.
+
 ## Quality commands
 
 ```bash
@@ -288,13 +462,17 @@ src/maops_pydevops/
         doctor.py           # required + optional checks
         config.py             # config CLI orchestration
         tools.py                # allowlisted tool inspection
+        inventory.py              # inventory CLI orchestration
     core/
         models.py             # enums + frozen dataclasses (doctor, tools)
         config_models.py         # config-domain enums + frozen dataclasses
-        output.py                  # text/JSON rendering
-        platform.py                  # injectable platform/python inspection
-        config.py                      # config path/parse/validate/init
-        runner.py                        # safe subprocess execution layer
+        inventory_models.py        # inventory-domain enums + frozen dataclasses
+        output.py                    # text/JSON rendering
+        platform.py                    # injectable platform/python inspection
+        config.py                        # config path/parse/validate/init
+        runner.py                          # safe subprocess execution layer
+        system_inventory.py                  # injectable host/OS/CPU/memory/uptime collection
+        filesystem_inventory.py                # bounded, deterministic filesystem scanner
 tests/
     unit/
     integration/
@@ -303,6 +481,8 @@ docs/
     best-practices.md
     configuration.md
     subprocess-safety.md
+    inventory.md
+    filesystem-inventory-safety.md
     roadmap.md
     troubleshooting.md
     engineering-reviews/
@@ -316,7 +496,7 @@ docs/
 
 ## Roadmap
 
-See [docs/roadmap.md](docs/roadmap.md) for what's implemented in v0.2.0
+See [docs/roadmap.md](docs/roadmap.md) for what's implemented in v0.3.0
 and what's under consideration for future releases.
 
 ## License

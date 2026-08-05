@@ -108,6 +108,29 @@ current directory.
 pure function from `CommandSpec` to `CommandResult`. It never imports
 `socket` and makes no network calls of any kind.
 
+## Exit-code and warning semantics across commands
+
+Every command's "a check failed / some data was unavailable" behavior
+does **not** map onto its exit code the same way. This divergence is
+intentional in every case, but was undocumented until Day 3 — a CI script
+author who has internalized one command's convention could reasonably
+assume it applies to another and be surprised when it doesn't:
+
+| Command | A `warn`-level condition... | Exit code impact |
+|---|---|---|
+| `doctor` | An optional tool (git/docker/kubectl/terraform/ansible) is not on `PATH` | Never affects the exit code — `overall` can only be `pass`/`fail`, never `warn` |
+| `tools inspect` | A requested tool is not on `PATH` | **Does** make `overall` non-`pass` and exit `1` — a single missing requested tool fails the whole invocation, by original design |
+| `inventory system` | Optional data (distribution, load averages, memory, uptime) is unavailable or malformed | Never affects the exit code — always exits `0` for a successfully-produced report, whether `overall` is `pass` or `warn` |
+| `inventory filesystem` | A per-entry race or permission issue was encountered during traversal | Never affects the exit code — only a root path that cannot be classified at all (nonexistent/inaccessible) exits `1` |
+
+In short: `doctor` and both `inventory` commands treat "some optional data
+was unavailable" as fully non-fatal, while `tools inspect` treats "a
+requested tool is missing" as fatal to the invocation (though still
+distinct from a `fail`-level condition, which would mean the tool was
+found but its version check itself failed or timed out). See
+`docs/inventory.md` for the full field-level semantics behind
+`inventory`'s degraded-data warnings.
+
 ## Limitations
 
 - **Timeout scope**: `subprocess.run(..., timeout=...)` terminates the

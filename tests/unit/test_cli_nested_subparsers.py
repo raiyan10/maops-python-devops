@@ -17,6 +17,12 @@ def test_bare_tools_command_exits_two() -> None:
     assert exc_info.value.code == 2
 
 
+def test_bare_inventory_command_exits_two() -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        main(["inventory"])
+    assert exc_info.value.code == 2
+
+
 def test_top_level_help_exits_zero(capsys: pytest.CaptureFixture[str]) -> None:
     with pytest.raises(SystemExit) as exc_info:
         main(["--help"])
@@ -45,6 +51,24 @@ def test_tools_group_help_exits_zero() -> None:
 def test_tools_inspect_leaf_help_exits_zero() -> None:
     with pytest.raises(SystemExit) as exc_info:
         main(["tools", "inspect", "--help"])
+    assert exc_info.value.code == 0
+
+
+def test_inventory_group_help_exits_zero() -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        main(["inventory", "--help"])
+    assert exc_info.value.code == 0
+
+
+def test_inventory_system_leaf_help_exits_zero() -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        main(["inventory", "system", "--help"])
+    assert exc_info.value.code == 0
+
+
+def test_inventory_filesystem_leaf_help_exits_zero() -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        main(["inventory", "filesystem", "--help"])
     assert exc_info.value.code == 0
 
 

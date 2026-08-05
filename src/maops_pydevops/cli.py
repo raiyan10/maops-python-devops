@@ -20,6 +20,7 @@ from maops_pydevops.commands.config import (
     validate_config,
 )
 from maops_pydevops.commands.doctor import build_report
+from maops_pydevops.commands.inventory import build_filesystem_report, build_system_report
 from maops_pydevops.commands.tools import TOOL_ALLOWLIST, build_inspect_report
 from maops_pydevops.core.config import resolve_effective_config
 from maops_pydevops.core.config_models import (
@@ -33,6 +34,10 @@ from maops_pydevops.core.models import CheckStatus, OutputFormat
 from maops_pydevops.core.output import (
     render_config_show_json,
     render_config_show_text,
+    render_inventory_filesystem_json,
+    render_inventory_filesystem_text,
+    render_inventory_system_json,
+    render_inventory_system_text,
     render_json,
     render_text,
     render_tools_inspect_json,
@@ -61,6 +66,33 @@ def _parse_timeout_seconds(raw: str) -> float:
             f"and at most {MAX_COMMAND_TIMEOUT_SECONDS}"
         )
     return value
+
+
+def _parse_bounded_int(raw: str, *, minimum: int, maximum: int, label: str) -> int:
+    """argparse ``type=`` callback: parse and range-check a bounded integer value."""
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            f"{label} must be an integer between {minimum} and {maximum}"
+        ) from exc
+    if not (minimum <= value <= maximum):
+        raise argparse.ArgumentTypeError(
+            f"{label} must be an integer between {minimum} and {maximum}"
+        )
+    return value
+
+
+def _parse_max_depth(raw: str) -> int:
+    return _parse_bounded_int(raw, minimum=0, maximum=64, label="--max-depth")
+
+
+def _parse_max_entries(raw: str) -> int:
+    return _parse_bounded_int(raw, minimum=1, maximum=1_000_000, label="--max-entries")
+
+
+def _parse_top(raw: str) -> int:
+    return _parse_bounded_int(raw, minimum=0, maximum=100, label="--top")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -142,6 +174,60 @@ def build_parser() -> argparse.ArgumentParser:
         type=_parse_timeout_seconds,
         default=None,
         help="Per-tool timeout in seconds (default: effective command_timeout_seconds).",
+    )
+
+    inventory_parser = subparsers.add_parser(
+        "inventory", help="Read-only system and filesystem inventory."
+    )
+    inventory_subparsers = inventory_parser.add_subparsers(dest="inventory_command", required=True)
+
+    inventory_system_parser = inventory_subparsers.add_parser(
+        "system",
+        help=(
+            "Report host, OS, CPU, memory, and uptime facts. Always exits 0 unless a "
+            "report cannot be built at all; see 'overall' in the report for "
+            "degraded-data warnings."
+        ),
+    )
+    inventory_system_parser.add_argument(
+        "--format",
+        choices=[fmt.value for fmt in OutputFormat],
+        default=OutputFormat.TEXT.value,
+        help="Output format (default: text).",
+    )
+
+    inventory_filesystem_parser = inventory_subparsers.add_parser(
+        "filesystem", help="Report a bounded filesystem tree summary."
+    )
+    inventory_filesystem_parser.add_argument(
+        "path",
+        nargs="?",
+        default=None,
+        help="Root path to scan (default: current working directory).",
+    )
+    inventory_filesystem_parser.add_argument(
+        "--format",
+        choices=[fmt.value for fmt in OutputFormat],
+        default=OutputFormat.TEXT.value,
+        help="Output format (default: text).",
+    )
+    inventory_filesystem_parser.add_argument(
+        "--max-depth",
+        type=_parse_max_depth,
+        default=2,
+        help="Maximum traversal depth, 0-64 (default: 2).",
+    )
+    inventory_filesystem_parser.add_argument(
+        "--max-entries",
+        type=_parse_max_entries,
+        default=10000,
+        help="Maximum entries to scan, 1-1000000 (default: 10000).",
+    )
+    inventory_filesystem_parser.add_argument(
+        "--top",
+        type=_parse_top,
+        default=10,
+        help="Number of largest files to report, 0-100 (default: 10).",
     )
 
     return parser
@@ -259,6 +345,52 @@ def run_tools_inspect(
     return EXIT_SUCCESS if report.overall is CheckStatus.PASS else EXIT_FAILURE
 
 
+def run_inventory_system(format_arg: str) -> int:
+    """Report host, OS, CPU, memory, and uptime facts.
+
+    Always exits 0 unless report construction itself raises (unreachable
+    in practice, since every optional field independently degrades to
+    null plus a warning issue rather than aborting). See ``overall`` in
+    the report body for degraded-data warnings -- the exit code does not
+    reflect partial/optional data being unavailable. ``--format`` is not
+    resolved from the configuration file: a broken config file must never
+    affect this command's exit code.
+    """
+    report = build_system_report()
+    output_format = OutputFormat(format_arg)
+    if output_format is OutputFormat.JSON:
+        print(render_inventory_system_json(report))
+    else:
+        print(render_inventory_system_text(report), end="")
+    return EXIT_SUCCESS
+
+
+def run_inventory_filesystem(
+    path_arg: str | None, format_arg: str, max_depth: int, max_entries: int, top: int
+) -> int:
+    """Report a bounded filesystem tree summary.
+
+    Exits 1 only if the root itself cannot be classified at all
+    (nonexistent or inaccessible); recoverable per-entry issues during an
+    otherwise-successful scan never affect the exit code. ``--format`` is
+    not resolved from the configuration file, for the same reason as
+    ``inventory system``.
+    """
+    report, error = build_filesystem_report(
+        path_arg, max_depth=max_depth, max_entries=max_entries, top=top
+    )
+    if report is None:
+        print(f"Error: {error}", file=sys.stderr)
+        return EXIT_FAILURE
+
+    output_format = OutputFormat(format_arg)
+    if output_format is OutputFormat.JSON:
+        print(render_inventory_filesystem_json(report))
+    else:
+        print(render_inventory_filesystem_text(report), end="")
+    return EXIT_SUCCESS
+
+
 def _dispatch_version(args: argparse.Namespace) -> int:
     del args
     return run_version()
@@ -289,6 +421,16 @@ def _dispatch_tools_inspect(args: argparse.Namespace) -> int:
     return run_tools_inspect(args.tool, args.format, args.timeout)
 
 
+def _dispatch_inventory_system(args: argparse.Namespace) -> int:
+    return run_inventory_system(args.format)
+
+
+def _dispatch_inventory_filesystem(args: argparse.Namespace) -> int:
+    return run_inventory_filesystem(
+        args.path, args.format, args.max_depth, args.max_entries, args.top
+    )
+
+
 _COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
     "version": _dispatch_version,
     "doctor": _dispatch_doctor,
@@ -305,17 +447,30 @@ _TOOLS_COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
     "inspect": _dispatch_tools_inspect,
 }
 
+_INVENTORY_COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
+    "system": _dispatch_inventory_system,
+    "filesystem": _dispatch_inventory_filesystem,
+}
+
 _COMMAND_GROUPS: dict[str, dict[str, Callable[[argparse.Namespace], int]]] = {
     "config": _CONFIG_COMMANDS,
     "tools": _TOOLS_COMMANDS,
+    "inventory": _INVENTORY_COMMANDS,
 }
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Shared entry point for the console script and ``python -m`` invocation.
 
-    ``--version`` always short-circuits, even alongside a subcommand: e.g.
-    ``maops-py --version doctor`` prints only the version and exits 0.
+    ``--version`` short-circuits whenever ``parser.parse_args()`` itself
+    succeeds -- e.g. ``maops-py --version doctor`` prints only the version
+    and exits 0, regardless of ``--version``'s position on the command
+    line. It does not short-circuit an *incomplete* two-level command
+    group given with no leaf subcommand (``config``, ``tools``, or
+    ``inventory`` alone): argparse raises a required-subcommand usage
+    error during parsing itself, before this function ever inspects
+    ``args.version``, so e.g. ``maops-py --version tools`` exits 2 with a
+    usage error rather than printing the version.
     """
     parser = build_parser()
     args = parser.parse_args(argv)

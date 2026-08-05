@@ -89,9 +89,12 @@ def test_json_field_types(
     assert isinstance(data["path"], str)
     assert isinstance(data["exists"], bool)
     assert isinstance(data["valid"], bool)
+    assert isinstance(data["values"]["output_format"], str)
     assert isinstance(data["values"]["command_timeout_seconds"], float)
     assert isinstance(data["values"]["max_output_bytes"], int)
     assert isinstance(data["sources"]["output_format"], str)
+    assert isinstance(data["sources"]["command_timeout_seconds"], str)
+    assert isinstance(data["sources"]["max_output_bytes"], str)
 
 
 def test_default_format_falls_back_to_effective_output_format(

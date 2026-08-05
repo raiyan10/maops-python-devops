@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from maops_pydevops.core.config_models import ConfigShowReport
+from maops_pydevops.core.inventory_models import FilesystemInventoryReport, SystemInventoryReport
 from maops_pydevops.core.models import DoctorReport, ToolsInspectReport
 
 _LABEL_WIDTH = 20
@@ -87,4 +88,96 @@ def render_tools_inspect_text(report: ToolsInspectReport) -> str:
 
 def render_tools_inspect_json(report: ToolsInspectReport) -> str:
     """Render a ToolsInspectReport as a single, deterministic JSON document."""
+    return report.to_json()
+
+
+def render_inventory_system_text(report: SystemInventoryReport) -> str:
+    """Render a SystemInventoryReport as plain, deterministic text."""
+    load_average = "(unavailable)"
+    if report.cpu.load_average_1m is not None:
+        load_average = (
+            f"{report.cpu.load_average_1m} {report.cpu.load_average_5m} "
+            f"{report.cpu.load_average_15m}"
+        )
+    memory_line = "(unavailable)"
+    if report.memory.used_percent is not None:
+        memory_line = f"{report.memory.used_percent}% of {report.memory.total_bytes} bytes"
+    uptime_line = "(unavailable)"
+    if report.uptime.seconds is not None:
+        uptime_line = f"{report.uptime.seconds}s"
+
+    lines: list[str] = [
+        "MAOps Python DevOps Toolkit - System Inventory",
+        f"Version:               {report.version}",
+        f"Hostname:              {report.host.hostname or '(unknown)'}",
+        f"OS:                    {report.host.os_family} {report.host.os_release}".rstrip(),
+        f"OS version:            {report.host.os_version or '(unknown)'}",
+        f"Machine:               {report.host.machine}",
+        (
+            f"Distribution:          {report.distribution.name or '(unavailable)'} "
+            f"{report.distribution.version_id or ''}"
+        ).rstrip(),
+        f"Python:                {report.python.version} ({report.python.implementation})",
+        f"Python executable:     {report.python.executable}",
+        (
+            "CPU logical count:     "
+            f"{report.cpu.logical_count if report.cpu.logical_count is not None else '(unknown)'}"
+        ),
+        f"Load average (1/5/15): {load_average}",
+        f"Memory used:           {memory_line}",
+        f"Uptime:                {uptime_line}",
+        "",
+        "Issues:",
+    ]
+    for issue in report.issues:
+        lines.append(_format_check_line(issue.status.value, issue.component, issue.detail))
+
+    lines.append("")
+    lines.append(f"Overall status: {report.overall.value.upper()}")
+    return "\n".join(lines) + "\n"
+
+
+def render_inventory_system_json(report: SystemInventoryReport) -> str:
+    """Render a SystemInventoryReport as a single, deterministic JSON document."""
+    return report.to_json()
+
+
+def render_inventory_filesystem_text(report: FilesystemInventoryReport) -> str:
+    """Render a FilesystemInventoryReport as plain, deterministic text."""
+    summary = report.summary
+    lines: list[str] = [
+        "MAOps Python DevOps Toolkit - Filesystem Inventory",
+        f"Version:            {report.version}",
+        f"Root:               {report.root}",
+        f"Max depth:          {report.options.max_depth}",
+        f"Max entries:        {report.options.max_entries}",
+        f"Scanned entries:    {summary.scanned_entries}",
+        f"Directories:        {summary.directories}",
+        f"Files:              {summary.files}",
+        f"Symlinks:           {summary.symlinks}",
+        f"Other:              {summary.other}",
+        f"Total file bytes:   {summary.total_file_bytes}",
+        f"Skipped entries:    {summary.skipped_entries}",
+        f"Inaccessible:       {summary.inaccessible_entries}",
+        f"Different fs:       {summary.different_filesystem_entries}",
+        f"Max depth reached:  {report.max_depth_reached}",
+        f"Truncated:          {report.truncated}",
+        "",
+        "Largest files:",
+    ]
+    for entry in report.largest_files:
+        lines.append(f"  {entry.size_bytes:>12}  {entry.relative_path}")
+
+    lines.append("")
+    lines.append("Issues:")
+    for issue in report.issues:
+        lines.append(_format_check_line(issue.status.value, issue.component, issue.detail))
+
+    lines.append("")
+    lines.append(f"Overall status: {report.overall.value.upper()}")
+    return "\n".join(lines) + "\n"
+
+
+def render_inventory_filesystem_json(report: FilesystemInventoryReport) -> str:
+    """Render a FilesystemInventoryReport as a single, deterministic JSON document."""
     return report.to_json()

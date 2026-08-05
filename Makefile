@@ -70,7 +70,11 @@ smoke-install:
 	HOME="$$smoke_home" "$$tmp_dir/venv/bin/maops-py" config path; \
 	smoke_bin="$$tmp_dir/fake-bin"; mkdir -p "$$smoke_bin"; \
 	cp scripts/smoke/fake-git "$$smoke_bin/git"; chmod +x "$$smoke_bin/git"; \
-	PATH="$$smoke_bin:$$PATH" HOME="$$smoke_home" "$$tmp_dir/venv/bin/maops-py" tools inspect git --format json | "$$tmp_dir/venv/bin/python" -m json.tool >/dev/null
+	PATH="$$smoke_bin:$$PATH" HOME="$$smoke_home" "$$tmp_dir/venv/bin/maops-py" tools inspect git --format json | "$$tmp_dir/venv/bin/python" -m json.tool >/dev/null; \
+	"$$tmp_dir/venv/bin/maops-py" inventory system --format json | "$$tmp_dir/venv/bin/python" -m json.tool >/dev/null; \
+	smoke_fs="$$tmp_dir/fs-fixture"; \
+	"$$tmp_dir/venv/bin/python" scripts/smoke/make-fixture-tree.py "$$smoke_fs"; \
+	"$$tmp_dir/venv/bin/maops-py" inventory filesystem "$$smoke_fs" --max-depth 2 --top 3 --format json | "$$tmp_dir/venv/bin/python" -m json.tool >/dev/null
 
 quality: format-check lint type-check coverage
 

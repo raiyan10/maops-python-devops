@@ -15,13 +15,17 @@ src/maops_pydevops/
         doctor.py         # required + optional checks, build_report()
         config.py           # config CLI orchestration: build_show_report(), etc.
         tools.py              # allowlisted tool inspection, build_inspect_report()
+        inventory.py            # inventory CLI orchestration: build_system_report(), build_filesystem_report()
     core/
         models.py           # enums + frozen dataclasses (doctor, tools-inspect)
         config_models.py      # config-domain enums + frozen dataclasses
-        output.py               # text/JSON rendering, all report types
-        platform.py               # injectable platform/python inspection
-        config.py                   # config path/parse/validate/precedence/init
-        runner.py                     # safe subprocess execution layer
+        inventory_models.py     # inventory-domain enums + frozen dataclasses
+        output.py                 # text/JSON rendering, all report types
+        platform.py                 # injectable platform/python inspection
+        config.py                     # config path/parse/validate/precedence/init
+        runner.py                       # safe subprocess execution layer
+        system_inventory.py               # injectable host/OS/CPU/memory/uptime collection
+        filesystem_inventory.py             # bounded, deterministic filesystem scanner
 ```
 
 ## 2. Entry points
@@ -52,17 +56,26 @@ version-dependent behavior between Python 3.11 and 3.12 (see
 `CHANGELOG.md`'s `[0.2.0]` "Fixed" entry). It still produces exit `2` for
 an unsupported name.
 
-`config` and `tools` are two-level command groups (`config show`, `tools
-inspect`, etc.) — the first nested subparsers in this codebase. Each
-group has its own `add_subparsers(dest="<group>_command", required=True)`
-and its own flat dispatch dict (`_CONFIG_COMMANDS`, `_TOOLS_COMMANDS`),
-collected under `_COMMAND_GROUPS`. A bare `maops-py config` (no leaf
-subcommand) is rejected by argparse itself via `required=True`, exit 2.
+`config`, `tools`, and `inventory` are two-level command groups (`config
+show`, `tools inspect`, `inventory system`, `inventory filesystem`,
+etc.). Each group has its own
+`add_subparsers(dest="<group>_command", required=True)` and its own flat
+dispatch dict (`_CONFIG_COMMANDS`, `_TOOLS_COMMANDS`,
+`_INVENTORY_COMMANDS`), collected under `_COMMAND_GROUPS`. A bare
+`maops-py config` (or `tools`, or `inventory`) with no leaf subcommand is
+rejected by argparse itself via `required=True`, exit 2.
 
-`--version` is checked first in `main()`, before subcommand dispatch, so
-it always short-circuits — `maops-py --version doctor` prints only the
-version and exits 0, regardless of what subcommand follows. `maops-py
-doctor --version` is a separate case: `--version` is a top-level-only
+`--version` is checked first in `main()`, before subcommand dispatch —
+but only after `parser.parse_args()` itself has already succeeded.
+Whenever parsing succeeds, `--version` always short-circuits:
+`maops-py --version doctor` and `maops-py --version inventory system`
+both print only the version and exit 0, regardless of what complete
+subcommand path follows. It does **not** short-circuit an *incomplete*
+two-level group given with no leaf subcommand: `maops-py --version tools`
+still exits 2, because argparse's own `required=True` validation on the
+nested subparser raises a usage error during `parse_args()` itself,
+before `main()` ever reaches the `args.version` check. `maops-py doctor
+--version` is a separate case entirely: `--version` is a top-level-only
 flag, never added to any subparser, so this is an argparse "unrecognized
 arguments" usage error (exit 2).
 
@@ -121,6 +134,47 @@ cli.py:run_tools_inspect()
 `run_command()` is the only function in this package that imports
 `subprocess`; see `docs/subprocess-safety.md` for its full contract.
 
+## 4c. Data flow: inventory system
+
+```
+core/system_inventory.py:gather_host_info()/gather_distribution_info()/
+    gather_python_info()/gather_cpu_info()/gather_memory_info()/
+    gather_uptime_info()                        # fixed call order, each independently degradable
+    -> (model, InventoryIssue | None) per source
+core/system_inventory.py:build_system_report()
+    collects non-None issues in the same fixed order
+    -> core/inventory_models.py:SystemInventoryReport
+
+cli.py:run_inventory_system()
+    core/output.py:render_inventory_system_text() or render_inventory_system_json()
+    -> print once, always exit 0 for a successfully-built report
+```
+
+Every optional data source degrades independently to `null` fields plus
+one warning `InventoryIssue`, rather than aborting the whole report; see
+`docs/inventory.md` for the full field-level contract. Unlike `doctor`
+and `tools inspect`, this report's `overall` status and its exit code are
+deliberately decoupled — see `docs/subprocess-safety.md`'s "Exit-code and
+warning semantics across commands" section.
+
+## 4d. Data flow: inventory filesystem
+
+```
+core/filesystem_inventory.py:build_filesystem_report()
+    os.lstat(root)                              # root classification; the only
+                                                 # (report=None, error) exit-1 path
+    _scan_directory()                           # explicit depth-first recursion,
+                                                 # os.scandir() per directory, name-sorted
+    -> core/inventory_models.py:FilesystemInventoryReport
+
+cli.py:run_inventory_filesystem()
+    core/output.py:render_inventory_filesystem_text() or render_inventory_filesystem_json()
+    -> print once, exit 1 only if root could not be classified, else exit 0
+```
+
+See `docs/filesystem-inventory-safety.md` for the complete traversal,
+symlink, same-filesystem, and race-handling contract.
+
 ## 5. Typed models
 
 `core/models.py` defines `CheckStatus` and `OutputFormat` as
@@ -132,7 +186,16 @@ configuration domain: `ConfigSource`, `ConfigFileStatus`, `ConfigInitStatus`
 as `StrEnum`; `EffectiveConfig`, `EffectiveConfigSources`, `ConfigResolution`,
 `ConfigShowReport`, `ValidatedConfigValues`, `TomlParseResult`,
 `SchemaValidationResult`, `ConfigInitResult` as `frozen=True` dataclasses.
-Serialization never uses `dataclasses.asdict()` or dict spreading — every
+`core/inventory_models.py` follows the same convention for the inventory
+domain, split into its own file rather than extending `core/models.py`
+because it introduces over a dozen new dataclasses across two
+sub-domains: a shared `InventoryIssue`; `HostInfo`, `DistributionInfo`,
+`SystemPythonInfo`, `CpuInfo`, `MemoryInfo`, `UptimeInfo`,
+`SystemInventoryReport` for `inventory system`; `FilesystemScanOptions`,
+`FilesystemScanSummary`, `LargestFileEntry`, `FilesystemInventoryReport`
+for `inventory filesystem`. It reuses `CheckStatus` from `core/models.py`
+rather than defining a new status enum. Serialization never uses
+`dataclasses.asdict()` or dict spreading — every
 field is written out explicitly so the JSON schema is traceable directly
 from the code. No custom exception classes are introduced anywhere: every
 public function in `core/config.py` and `core/runner.py` returns a typed
@@ -146,6 +209,17 @@ same pattern `DoctorCheck.status` already established in Day 1.
   `fail`)
 - `2` — CLI usage error (unknown command, invalid `--format`, no
   subcommand)
+
+This top-level convention holds everywhere, but what counts as a `1`
+varies meaningfully by command — see `docs/subprocess-safety.md`'s
+"Exit-code and warning semantics across commands" section for the full,
+per-command breakdown. Notably, `inventory system`/`inventory
+filesystem` decouple their `overall` report field from their exit code:
+both always exit `0` for a successfully-produced report regardless of
+`overall` being `pass` or `warn`, since partial optional data being
+unavailable (system) or a recoverable per-entry scan issue (filesystem)
+is never an operational failure — only a report that could not be built
+at all is.
 
 ## 7. Versioning
 
@@ -165,22 +239,38 @@ Day 2 does not expose an arbitrary command-execution CLI. `core/config.py`
 is the sole module permitted to read named environment variables
 (`MAOPS_PY_*`, `XDG_CONFIG_HOME`, `HOME`) and to write outside a
 test/build temporary directory, and only under the user's own
-configuration directory. No module performs network I/O or dumps the
-full environment. See `.claude/CLAUDE.md` for the full restriction list
-and `docs/subprocess-safety.md` / `docs/configuration.md` for the two new
-modules' complete contracts.
+configuration directory. `core/system_inventory.py` and
+`core/filesystem_inventory.py` never import `subprocess` or `socket`, and
+never read named environment variables — `inventory system` collects
+host/OS/CPU/memory/uptime facts via `platform`/`os` introspection only,
+and `inventory filesystem` reads only filesystem metadata
+(`os.lstat`/`os.scandir`/`entry.stat`), never file content, never a hash.
+No module performs network I/O or dumps the full environment. See
+`.claude/CLAUDE.md` for the full restriction list,
+`docs/subprocess-safety.md` / `docs/configuration.md` for those two
+modules' complete contracts, and `docs/inventory.md` /
+`docs/filesystem-inventory-safety.md` for the inventory modules'.
 
 ## 9. Tests
 
 `tests/unit/` exercises models, platform logic, doctor checks, config
-resolution/validation/init, the subprocess runner, tool inspection, and
-CLI dispatch in-process with `monkeypatch` for anything host-dependent
-(tool presence, Python version, OS family, environment variables, HOME).
-No config test ever reads or writes the real invoking user's HOME — every
-test isolates `HOME`/`XDG_CONFIG_HOME`/`MAOPS_PY_CONFIG_FILE` via
-`monkeypatch.setenv` or an injected `env=` mapping. `tests/integration/`
-exercises the actual entry points as subprocesses (`python -m
-maops_pydevops`, the `maops-py` console script) to verify the two
-invocation paths are truly equivalent, that import produces no output,
-and — for `tools inspect` — using a deterministic stub executable
-(`scripts/smoke/fake-git`) rather than a real, host-installed tool.
+resolution/validation/init, the subprocess runner, tool inspection,
+system/filesystem inventory collection, and CLI dispatch in-process with
+`monkeypatch` for anything host-dependent (tool presence, Python version,
+OS family, environment variables, HOME, procfs content, real filesystem
+races). No config test ever reads or writes the real invoking user's
+HOME — every test isolates `HOME`/`XDG_CONFIG_HOME`/`MAOPS_PY_CONFIG_FILE`
+via `monkeypatch.setenv` or an injected `env=` mapping. Filesystem
+inventory tests always scan a `tmp_path`-scoped fixture tree, never the
+real repository tree, and procfs-derived system-inventory tests inject
+fabricated `/proc/meminfo`/`/proc/uptime` content directly rather than
+depending on the real host's values. `tests/integration/` exercises the
+actual entry points as subprocesses (`python -m maops_pydevops`, the
+`maops-py` console script) to verify the two invocation paths are truly
+equivalent, that import produces no output, and — for `tools inspect` —
+using a deterministic stub executable (`scripts/smoke/fake-git`) rather
+than a real, host-installed tool. `test_release_permissions.py` and
+`test_release_artifacts.py` build into an isolated, `tmp_path`-scoped
+output directory (`python -m build --outdir`) rather than the shared
+repository `dist/`, so they are safe to run concurrently with `make
+build`/`make quality` against the same working tree.
