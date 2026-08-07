@@ -118,3 +118,46 @@ valid tree is recorded in the report's `issues` array and sets `overall`
 to `"warn"`, but never changes the exit code. See
 `docs/filesystem-inventory-safety.md` for the full race-handling
 contract.
+
+## 15. `maops-py logs parse`/`logs analyze` exits `1`
+
+Two distinct causes, both reported via the printed `Error:` message
+(which preserves the path you supplied exactly as typed):
+
+- The file itself could not be opened at all — it doesn't exist, is a
+  directory, is a symbolic link (refused, never followed), is a FIFO/
+  socket/block/character device, is not accessible, or was replaced
+  between the safety check and the open (a detected race).
+- The file **is** accessible and non-empty, but contained **zero
+  parseable events** — every line was malformed under the selected
+  `--input-format`. Try `--input-format auto` if you passed an explicit
+  format that doesn't match the file's actual content.
+
+A malformed/overlong line, an invalid timestamp, truncation, or any
+`logs analyze` finding is **not** a reason for a non-zero exit — those
+appear in `issues`/`findings` with `overall: "warn"` while still exiting
+`0`. See `docs/log-parsing.md` and `docs/log-analysis.md` for the
+complete exit-code semantics.
+
+## 16. `maops-py logs parse`/`logs analyze` output still contains a value that looks like a secret
+
+Default redaction (see `docs/log-redaction.md`) only matches the
+documented key names (`password`, `passwd`, `pwd`, `token`,
+`api_key`/`api-key`/`apikey`, `secret`, `access_key`/`access-key`,
+`Bearer` tokens, and URI userinfo passwords) inside the `message` field.
+A differently-named secret field, a value embedded in `hostname`/
+`source`, or a secret shape this fixed pattern set doesn't recognize
+will not be redacted — this is a documented, best-effort limitation, not
+a bug. Confirm you did not pass `--no-redact`, which disables this pass
+entirely for that invocation.
+
+## 17. `maops-py logs parse` reports a BSD-style syslog event's `timestamp` as `null`
+
+This is expected: a BSD-style timestamp (`Aug  6 10:30:00`) carries no
+year or timezone in its own text, and this toolkit never infers either —
+`timestamp` stays `null` with the original text preserved verbatim in
+`timestamp_raw`, and no issue is raised, since this is documented,
+correct behavior rather than degraded data. A `logs analyze` run over a
+BSD-only file will show `time.timestamped_events: 0` and an empty peak
+bucket for the same reason — see `docs/log-parsing.md` and
+`docs/log-analysis.md`.

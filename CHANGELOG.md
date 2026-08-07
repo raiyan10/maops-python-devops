@@ -5,6 +5,62 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-08-06
+
+Adds bounded, typed, structured log parsing and deterministic operational
+event analysis, complementing `inventory` (host/filesystem facts) with
+read-only insight into log file content. `logs parse` turns a JSONL or
+syslog file into typed, redacted events with a per-line issue trail;
+`logs analyze` streams the same input into deterministic severity/source
+counts, normalized message signatures, fixed-duration time-bucket peaks,
+and threshold-based findings. This performs deterministic parsing,
+aggregation, and threshold comparisons only — it makes no machine
+learning, artificial intelligence, behavioral detection, or general
+anomaly detection claim. The toolkit remains standard-library-only at
+runtime.
+
+### Added
+
+- `maops-py logs parse PATH [--input-format auto|jsonl|syslog] [--format
+  text|json] [--max-lines N] [--max-bytes N] [--max-line-bytes N]
+  [--max-events N] [--no-redact]` — parses a single log file into a
+  structured report of typed events and parse issues. `core/log_reader.py`
+  opens the file with `O_NOFOLLOW`/`O_CLOEXEC` where available, verifies
+  the descriptor with `os.fstat()` against the pre-open `os.lstat()`
+  result (rejecting symlinks, directories, and non-regular files, and
+  detecting a path replaced between check and open), and reads bounded,
+  sequential binary chunks — never `mmap`, never a whole-file read.
+  Overlong lines are skipped without retaining their content. Secret
+  values (bearer tokens, `password`/`token`/`api_key`-style fields, URI
+  userinfo passwords) are redacted from event messages by default; report
+  fields never contain a complete unredacted raw line (see
+  `docs/log-redaction.md`).
+- `maops-py logs analyze PATH [--input-format ...] [--format ...] [--top
+  N] [--bucket-seconds N] [--repeat-threshold N] [--error-threshold N]
+  [--no-redact]` — streams the same bounded input into severity counts,
+  source counts, normalized top message signatures, a peak fixed-duration
+  UTC time bucket, and deterministic advisory findings (repeated
+  signatures, error-volume, unknown severities, out-of-order timestamps,
+  truncation). Individual events are never retained for analysis; only
+  small per-distinct-value aggregates are kept in memory (see
+  `docs/log-analysis.md`).
+- New typed models in `core/log_models.py` (`LogSeverity`,
+  `LogInputFormat`, `LogParseIssueCode`, `LogAnalysisFindingCode`,
+  `LogEvent`, `LogParseReport`, `LogAnalysisReport`, and their supporting
+  frozen dataclasses), parsing in `core/log_parsers.py` (JSONL field-alias
+  resolution, a staged syslog grammar with PRI/RFC3339/BSD-timestamp
+  handling, and per-line `auto` format detection), and bounded regex
+  redaction in `core/log_redaction.py`.
+- `docs/log-parsing.md`, `docs/log-analysis.md`, and
+  `docs/log-redaction.md` documenting accepted formats, JSONL aliases,
+  syslog limitations, timestamp handling, severity normalization,
+  file limits, redaction patterns, output schemas, and exit codes.
+
+### Changed
+
+- `docs/subprocess-safety.md`'s "Exit-code and warning semantics across
+  commands" table gains rows for `logs parse`/`logs analyze`.
+
 ## [0.3.0] - 2026-08-05
 
 Adds typed, structured, read-only system and filesystem inventory,

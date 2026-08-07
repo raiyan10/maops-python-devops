@@ -34,6 +34,21 @@ def test_smoke_install_does_not_select_wheel_by_glob_and_head() -> None:
     assert "scripts/verify_wheel.py" in recipe
 
 
+def test_smoke_install_exercises_logs_parse_and_analyze() -> None:
+    recipe = _target_recipe(MAKEFILE_PATH.read_text(encoding="utf-8"), "smoke-install")
+    assert "scripts/smoke/make-log-fixture.py" in recipe
+    assert "logs parse" in recipe
+    assert "logs analyze" in recipe
+    # Both logs invocations validate their JSON output via json.tool,
+    # exactly like the existing inventory/tools/doctor smoke steps.
+    logs_lines = [
+        line for line in recipe.splitlines() if "logs parse" in line or "logs analyze" in line
+    ]
+    assert len(logs_lines) == 2
+    for line in logs_lines:
+        assert "json.tool" in line
+
+
 def test_build_removes_stale_artifacts_before_building() -> None:
     recipe = _target_recipe(MAKEFILE_PATH.read_text(encoding="utf-8"), "build")
     lines = [line.strip() for line in recipe.splitlines() if line.strip()]

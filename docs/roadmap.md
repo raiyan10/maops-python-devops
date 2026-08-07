@@ -68,7 +68,29 @@ and `output_format` only.
   documented (not structurally changed) `--version` short-circuit and
   cross-command exit-code semantics.
 
-## Post-v0.3.0 possibilities
+## Completed in v0.4.0
+
+- `maops-py logs parse PATH [--input-format auto|jsonl|syslog] [--format
+  text|json] [--max-lines N] [--max-bytes N] [--max-line-bytes N]
+  [--max-events N] [--no-redact]` — bounded, typed parsing of JSONL and
+  syslog log files via a first-of-its-kind fd-safe reader
+  (`core/log_reader.py`: `O_NOFOLLOW`/`O_CLOEXEC`/`O_NOATIME`,
+  `os.fstat()` TOCTOU verification, bounded sequential reads, never
+  `mmap`, never a whole-file read). Default secret redaction on the
+  `message` field, disableable via `--no-redact`. See
+  `docs/log-parsing.md` and `docs/log-redaction.md`.
+- `maops-py logs analyze PATH [--input-format ...] [--format ...] [--top
+  N] [--bucket-seconds N] [--repeat-threshold N] [--error-threshold N]
+  [--no-redact]` — streaming, bounded-memory operational analysis
+  (severity/source counts, normalized message signatures, epoch-integer
+  time buckets, deterministic threshold findings). Individual events are
+  never retained; deterministic parsing and aggregation only — no
+  machine learning, artificial intelligence, behavioral detection, or
+  general anomaly-detection claim. See `docs/log-analysis.md`.
+- Still zero third-party runtime dependencies: `re`/`datetime` (both
+  standard library) are the only additions.
+
+## Post-v0.4.0 possibilities
 
 These are not committed, scheduled, or designed yet — listed only as
 plausible next steps, to be scoped on their own day:
@@ -82,3 +104,8 @@ plausible next steps, to be scoped on their own day:
   filesystem`, should a real use case for it emerge — the current release
   deliberately hardcodes both to their safest values with no CLI
   override.
+- Multiline/stack-trace continuation support for `logs parse`/`logs
+  analyze`, should a real use case for it emerge — Day 4 deliberately
+  parses each physical line independently, with no CLI override.
+- A configurable additional secret-pattern list for `logs`' redaction
+  pass, beyond the fixed set Day 4 ships with.

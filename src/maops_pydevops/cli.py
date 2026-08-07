@@ -21,6 +21,7 @@ from maops_pydevops.commands.config import (
 )
 from maops_pydevops.commands.doctor import build_report
 from maops_pydevops.commands.inventory import build_filesystem_report, build_system_report
+from maops_pydevops.commands.logs import build_log_analysis_report, build_log_parse_report
 from maops_pydevops.commands.tools import TOOL_ALLOWLIST, build_inspect_report
 from maops_pydevops.core.config import resolve_effective_config
 from maops_pydevops.core.config_models import (
@@ -30,6 +31,7 @@ from maops_pydevops.core.config_models import (
     ConfigInitStatus,
     is_valid_command_timeout_seconds,
 )
+from maops_pydevops.core.log_models import LogInputFormat
 from maops_pydevops.core.models import CheckStatus, OutputFormat
 from maops_pydevops.core.output import (
     render_config_show_json,
@@ -39,6 +41,10 @@ from maops_pydevops.core.output import (
     render_inventory_system_json,
     render_inventory_system_text,
     render_json,
+    render_logs_analyze_json,
+    render_logs_analyze_text,
+    render_logs_parse_json,
+    render_logs_parse_text,
     render_text,
     render_tools_inspect_json,
     render_tools_inspect_text,
@@ -93,6 +99,34 @@ def _parse_max_entries(raw: str) -> int:
 
 def _parse_top(raw: str) -> int:
     return _parse_bounded_int(raw, minimum=0, maximum=100, label="--top")
+
+
+def _parse_max_lines(raw: str) -> int:
+    return _parse_bounded_int(raw, minimum=1, maximum=1_000_000, label="--max-lines")
+
+
+def _parse_max_bytes(raw: str) -> int:
+    return _parse_bounded_int(raw, minimum=1024, maximum=104_857_600, label="--max-bytes")
+
+
+def _parse_max_line_bytes(raw: str) -> int:
+    return _parse_bounded_int(raw, minimum=256, maximum=1_048_576, label="--max-line-bytes")
+
+
+def _parse_max_events(raw: str) -> int:
+    return _parse_bounded_int(raw, minimum=0, maximum=10_000, label="--max-events")
+
+
+def _parse_bucket_seconds(raw: str) -> int:
+    return _parse_bounded_int(raw, minimum=1, maximum=86_400, label="--bucket-seconds")
+
+
+def _parse_repeat_threshold(raw: str) -> int:
+    return _parse_bounded_int(raw, minimum=2, maximum=1_000_000, label="--repeat-threshold")
+
+
+def _parse_error_threshold(raw: str) -> int:
+    return _parse_bounded_int(raw, minimum=1, maximum=1_000_000, label="--error-threshold")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -228,6 +262,121 @@ def build_parser() -> argparse.ArgumentParser:
         type=_parse_top,
         default=10,
         help="Number of largest files to report, 0-100 (default: 10).",
+    )
+
+    logs_parser = subparsers.add_parser(
+        "logs", help="Bounded, structured log parsing and deterministic analysis."
+    )
+    logs_subparsers = logs_parser.add_subparsers(dest="logs_command", required=True)
+
+    logs_parse_parser = logs_subparsers.add_parser(
+        "parse", help="Parse a log file into structured events."
+    )
+    logs_parse_parser.add_argument("path", help="Log file to parse.")
+    logs_parse_parser.add_argument(
+        "--input-format",
+        choices=[fmt.value for fmt in LogInputFormat],
+        default=LogInputFormat.AUTO.value,
+        help="Input format (default: auto).",
+    )
+    logs_parse_parser.add_argument(
+        "--format",
+        choices=[fmt.value for fmt in OutputFormat],
+        default=None,
+        help="Output format (default: effective output_format).",
+    )
+    logs_parse_parser.add_argument(
+        "--max-lines",
+        type=_parse_max_lines,
+        default=10000,
+        help="Maximum lines to read, 1-1000000 (default: 10000).",
+    )
+    logs_parse_parser.add_argument(
+        "--max-bytes",
+        type=_parse_max_bytes,
+        default=10485760,
+        help="Maximum bytes to read, 1024-104857600 (default: 10485760).",
+    )
+    logs_parse_parser.add_argument(
+        "--max-line-bytes",
+        type=_parse_max_line_bytes,
+        default=65536,
+        help="Maximum bytes per line, 256-1048576 (default: 65536).",
+    )
+    logs_parse_parser.add_argument(
+        "--max-events",
+        type=_parse_max_events,
+        default=1000,
+        help="Maximum events retained in the report, 0-10000 (default: 1000).",
+    )
+    logs_parse_parser.add_argument(
+        "--no-redact",
+        action="store_true",
+        help="Disable default secret redaction (sensitive values may be displayed and stored).",
+    )
+
+    logs_analyze_parser = logs_subparsers.add_parser(
+        "analyze", help="Aggregate deterministic operational signal from a log file."
+    )
+    logs_analyze_parser.add_argument("path", help="Log file to analyze.")
+    logs_analyze_parser.add_argument(
+        "--input-format",
+        choices=[fmt.value for fmt in LogInputFormat],
+        default=LogInputFormat.AUTO.value,
+        help="Input format (default: auto).",
+    )
+    logs_analyze_parser.add_argument(
+        "--format",
+        choices=[fmt.value for fmt in OutputFormat],
+        default=None,
+        help="Output format (default: effective output_format).",
+    )
+    logs_analyze_parser.add_argument(
+        "--max-lines",
+        type=_parse_max_lines,
+        default=10000,
+        help="Maximum lines to read, 1-1000000 (default: 10000).",
+    )
+    logs_analyze_parser.add_argument(
+        "--max-bytes",
+        type=_parse_max_bytes,
+        default=10485760,
+        help="Maximum bytes to read, 1024-104857600 (default: 10485760).",
+    )
+    logs_analyze_parser.add_argument(
+        "--max-line-bytes",
+        type=_parse_max_line_bytes,
+        default=65536,
+        help="Maximum bytes per line, 256-1048576 (default: 65536).",
+    )
+    logs_analyze_parser.add_argument(
+        "--no-redact",
+        action="store_true",
+        help="Disable default secret redaction (sensitive values may be displayed and stored).",
+    )
+    logs_analyze_parser.add_argument(
+        "--top",
+        type=_parse_top,
+        default=10,
+        help="Number of top signatures/sources to report, 0-100 (default: 10).",
+    )
+    logs_analyze_parser.add_argument(
+        "--bucket-seconds",
+        type=_parse_bucket_seconds,
+        default=300,
+        help="Fixed time-bucket width in seconds, 1-86400 (default: 300).",
+    )
+    logs_analyze_parser.add_argument(
+        "--repeat-threshold",
+        type=_parse_repeat_threshold,
+        default=5,
+        help="Signature repeat count that triggers a finding, 2-1000000 (default: 5).",
+    )
+    logs_analyze_parser.add_argument(
+        "--error-threshold",
+        type=_parse_error_threshold,
+        default=1,
+        help="Error-volume count that triggers a finding, 1-1000000 (default: 1).",
     )
 
     return parser
@@ -391,6 +540,104 @@ def run_inventory_filesystem(
     return EXIT_SUCCESS
 
 
+def run_logs_parse(
+    path_arg: str,
+    input_format_arg: str,
+    format_arg: str | None,
+    max_lines: int,
+    max_bytes: int,
+    max_line_bytes: int,
+    max_events: int,
+    *,
+    redact: bool,
+) -> int:
+    """Parse a log file into structured events.
+
+    Exits 1 if the file itself cannot be opened at all, or if it is
+    non-empty but contains zero parseable events. A meaningful report
+    with warnings (malformed/overlong lines, truncation) still exits 0.
+    """
+    resolution = resolve_effective_config(cli_output_format=format_arg)
+    if resolution.config is None:
+        print(f"Error: {resolution.error}", file=sys.stderr)
+        return EXIT_FAILURE
+
+    report, error = build_log_parse_report(
+        path_arg,
+        input_format=LogInputFormat(input_format_arg),
+        max_lines=max_lines,
+        max_bytes=max_bytes,
+        max_line_bytes=max_line_bytes,
+        max_events=max_events,
+        redact=redact,
+    )
+    if report is None:
+        print(f"Error: {error}", file=sys.stderr)
+        return EXIT_FAILURE
+
+    if format_arg is not None:
+        output_format = OutputFormat(format_arg)
+    else:
+        output_format = resolution.config.output_format
+    if output_format is OutputFormat.JSON:
+        print(render_logs_parse_json(report))
+    else:
+        print(render_logs_parse_text(report), end="")
+    return EXIT_SUCCESS if report.overall is not CheckStatus.FAIL else EXIT_FAILURE
+
+
+def run_logs_analyze(
+    path_arg: str,
+    input_format_arg: str,
+    format_arg: str | None,
+    max_lines: int,
+    max_bytes: int,
+    max_line_bytes: int,
+    top: int,
+    bucket_seconds: int,
+    repeat_threshold: int,
+    error_threshold: int,
+    *,
+    redact: bool,
+) -> int:
+    """Stream a log file into deterministic operational analysis.
+
+    Exits 1 if the file itself cannot be opened at all, or if it is
+    non-empty but contains zero parseable events. A meaningful report
+    with advisory findings still exits 0.
+    """
+    resolution = resolve_effective_config(cli_output_format=format_arg)
+    if resolution.config is None:
+        print(f"Error: {resolution.error}", file=sys.stderr)
+        return EXIT_FAILURE
+
+    report, error = build_log_analysis_report(
+        path_arg,
+        input_format=LogInputFormat(input_format_arg),
+        max_lines=max_lines,
+        max_bytes=max_bytes,
+        max_line_bytes=max_line_bytes,
+        top=top,
+        bucket_seconds=bucket_seconds,
+        repeat_threshold=repeat_threshold,
+        error_threshold=error_threshold,
+        redact=redact,
+    )
+    if report is None:
+        print(f"Error: {error}", file=sys.stderr)
+        return EXIT_FAILURE
+
+    if format_arg is not None:
+        output_format = OutputFormat(format_arg)
+    else:
+        output_format = resolution.config.output_format
+    if output_format is OutputFormat.JSON:
+        print(render_logs_analyze_json(report))
+    else:
+        print(render_logs_analyze_text(report), end="")
+    return EXIT_SUCCESS if report.overall is not CheckStatus.FAIL else EXIT_FAILURE
+
+
 def _dispatch_version(args: argparse.Namespace) -> int:
     del args
     return run_version()
@@ -431,6 +678,35 @@ def _dispatch_inventory_filesystem(args: argparse.Namespace) -> int:
     )
 
 
+def _dispatch_logs_parse(args: argparse.Namespace) -> int:
+    return run_logs_parse(
+        args.path,
+        args.input_format,
+        args.format,
+        args.max_lines,
+        args.max_bytes,
+        args.max_line_bytes,
+        args.max_events,
+        redact=not args.no_redact,
+    )
+
+
+def _dispatch_logs_analyze(args: argparse.Namespace) -> int:
+    return run_logs_analyze(
+        args.path,
+        args.input_format,
+        args.format,
+        args.max_lines,
+        args.max_bytes,
+        args.max_line_bytes,
+        args.top,
+        args.bucket_seconds,
+        args.repeat_threshold,
+        args.error_threshold,
+        redact=not args.no_redact,
+    )
+
+
 _COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
     "version": _dispatch_version,
     "doctor": _dispatch_doctor,
@@ -452,10 +728,16 @@ _INVENTORY_COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
     "filesystem": _dispatch_inventory_filesystem,
 }
 
+_LOGS_COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
+    "parse": _dispatch_logs_parse,
+    "analyze": _dispatch_logs_analyze,
+}
+
 _COMMAND_GROUPS: dict[str, dict[str, Callable[[argparse.Namespace], int]]] = {
     "config": _CONFIG_COMMANDS,
     "tools": _TOOLS_COMMANDS,
     "inventory": _INVENTORY_COMMANDS,
+    "logs": _LOGS_COMMANDS,
 }
 
 

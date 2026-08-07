@@ -33,13 +33,13 @@ install:
 	$(PYTHON) -m pip install -e ".[dev]"
 
 format:
-	ruff format .
+	ruff format src tests
 
 format-check:
-	ruff format --check .
+	ruff format --check src tests
 
 lint:
-	ruff check .
+	ruff check src tests
 
 type-check:
 	mypy src
@@ -74,7 +74,11 @@ smoke-install:
 	"$$tmp_dir/venv/bin/maops-py" inventory system --format json | "$$tmp_dir/venv/bin/python" -m json.tool >/dev/null; \
 	smoke_fs="$$tmp_dir/fs-fixture"; \
 	"$$tmp_dir/venv/bin/python" scripts/smoke/make-fixture-tree.py "$$smoke_fs"; \
-	"$$tmp_dir/venv/bin/maops-py" inventory filesystem "$$smoke_fs" --max-depth 2 --top 3 --format json | "$$tmp_dir/venv/bin/python" -m json.tool >/dev/null
+	"$$tmp_dir/venv/bin/maops-py" inventory filesystem "$$smoke_fs" --max-depth 2 --top 3 --format json | "$$tmp_dir/venv/bin/python" -m json.tool >/dev/null; \
+	smoke_log="$$tmp_dir/log-fixture.log"; \
+	"$$tmp_dir/venv/bin/python" scripts/smoke/make-log-fixture.py "$$smoke_log"; \
+	"$$tmp_dir/venv/bin/maops-py" logs parse "$$smoke_log" --input-format auto --format json | "$$tmp_dir/venv/bin/python" -m json.tool >/dev/null; \
+	"$$tmp_dir/venv/bin/maops-py" logs analyze "$$smoke_log" --input-format auto --format json | "$$tmp_dir/venv/bin/python" -m json.tool >/dev/null
 
 quality: format-check lint type-check coverage
 

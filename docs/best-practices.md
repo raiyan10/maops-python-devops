@@ -27,17 +27,22 @@ fields serialize via `.value` rather than the enum object.
 
 ## 4. Stdlib-only runtime
 
-v0.3.0 still has zero runtime dependencies — `argparse`, `contextlib`,
-`dataclasses`, `enum`, `importlib.metadata`, `json`, `math`, `os`,
-`pathlib`, `platform`, `shutil`, `stat`, `subprocess` (confined to
-`core/runner.py` only), `sys`, `tempfile`, `time`, and `tomllib`
-(standard library since Python 3.11, matching this project's floor).
-`inventory system`/`inventory filesystem` add no new runtime
+v0.4.0 still has zero runtime dependencies — `argparse`, `contextlib`,
+`dataclasses`, `datetime`, `enum`, `errno`, `importlib.metadata`, `json`,
+`math`, `os`, `pathlib`, `platform`, `re`, `shutil`, `stat`, `subprocess`
+(confined to `core/runner.py` only), `sys`, `tempfile`, `time`, and
+`tomllib` (standard library since Python 3.11, matching this project's
+floor). `inventory system`/`inventory filesystem` add no new runtime
 dependency — `platform.freedesktop_os_release()` and `os.getloadavg()`
 are both plain stdlib, and `math` (for uptime's NaN/infinite rejection)
-is stdlib too. Development tooling (`pytest`, `ruff`, `mypy`, `build`)
-lives in the `dev` optional-dependency group, never in runtime
-`dependencies`.
+is stdlib too. `logs parse`/`logs analyze` add no new runtime dependency
+either: `core/log_reader.py` uses only `os`/`stat`/`errno`;
+`core/log_parsers.py` and `core/log_analysis.py` use only `re` and
+`datetime` (no third-party date-parsing or regex library); `datetime.UTC`
+(the alias used for timezone normalization) is available since Python
+3.11, matching this project's floor. Development tooling (`pytest`,
+`ruff`, `mypy`, `build`) lives in the `dev` optional-dependency group,
+never in runtime `dependencies`.
 
 ## 5. Deterministic, isolated tests
 
@@ -52,7 +57,11 @@ injectable overrides for every data source (including a raw
 `meminfo_lines`/`uptime_line` seam so tests can supply fabricated procfs
 content directly, never a real file); `core/filesystem_inventory.py`'s
 tests always scan a `tmp_path`-scoped fixture tree, never the real
-repository tree.
+repository tree. Log-reader tests simulate every adversarial condition
+(a symlink, a FIFO, a race between the safety check and the open, an
+`O_NOATIME` permission fallback) via `monkeypatch` rather than depending
+on real ownership/permission state, and always scan a `tmp_path`-scoped
+log file, never a real system log.
 
 ## 6. No premature abstraction
 
@@ -90,5 +99,13 @@ under the resolved configuration path. `core/system_inventory.py` and
 never read named environment variables, and the filesystem scanner never
 reads file content, computes a hash, follows a symbolic link, or crosses
 a mount-point boundary — see `docs/filesystem-inventory-safety.md` for
-the complete traversal contract. See `.claude/CLAUDE.md` for the
-authoritative list.
+the complete traversal contract. `core/log_reader.py`,
+`core/log_parsers.py`, `core/log_redaction.py`, and
+`core/log_analysis.py` never import `subprocess` or `socket`, never read
+named environment variables, never accept stdin input, never expand a
+glob, and never follow a symbolic link — `logs parse`/`logs analyze`
+open exactly the one literal path given, reject symlinks and special
+files outright, and never serialize a complete raw line into a report;
+see `docs/log-parsing.md`, `docs/log-analysis.md`, and
+`docs/log-redaction.md` for the complete contracts. See
+`.claude/CLAUDE.md` for the authoritative list.
