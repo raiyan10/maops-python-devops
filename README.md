@@ -19,8 +19,9 @@ automation.
 Day 1 / v0.1.0 delivered the packaging, CLI, and diagnostics foundation.
 Day 2 / v0.2.0 added typed configuration management and a reusable, safe
 subprocess execution layer, demonstrated through an allowlisted,
-read-only tool-inspection command. Day 3 / v0.3.0 adds typed, structured,
-read-only system and filesystem inventory:
+read-only tool-inspection command. Day 3 / v0.3.0 added typed, structured,
+read-only system and filesystem inventory. Day 4 / v0.4.0 adds bounded,
+typed log parsing and deterministic operational event analysis:
 
 - A `src`-layout, stdlib-only Python package (`maops_pydevops`) —
   `tomllib` (standard library since Python 3.11) is the only addition,
@@ -45,6 +46,18 @@ read-only system and filesystem inventory:
   [docs/inventory.md](docs/inventory.md) and
   [docs/filesystem-inventory-safety.md](docs/filesystem-inventory-safety.md)
   for the complete field and safety contracts.
+- `logs parse` / `logs analyze` — a bounded, fd-safe log-file reader
+  (rejecting symlinks and special files, never `mmap`-ing or reading a
+  whole file into memory) feeding deterministic JSONL/syslog parsing,
+  default secret redaction, and streaming operational analysis
+  (severity/source counts, normalized message signatures, time-bucket
+  peaks, threshold-based findings). Performs deterministic parsing,
+  aggregation, and threshold comparisons only — no machine learning,
+  artificial intelligence, behavioral detection, or general
+  anomaly-detection claim. See [docs/log-parsing.md](docs/log-parsing.md),
+  [docs/log-analysis.md](docs/log-analysis.md), and
+  [docs/log-redaction.md](docs/log-redaction.md) for the complete
+  contracts.
 - A full local quality gate (formatting, linting, strict typing, tests,
   coverage, build, isolated smoke-install) and a matching CI workflow.
 
@@ -103,11 +116,22 @@ maops-py inventory filesystem
 maops-py inventory filesystem .
 maops-py inventory filesystem . --max-depth 1 --top 5 --format json
 
+maops-py logs parse app.log
+maops-py logs parse app.log --input-format auto --format json
+maops-py logs parse app.log --max-lines 5000 --max-events 200
+maops-py logs parse app.log --no-redact
+maops-py logs analyze app.log
+maops-py logs analyze app.log --format json
+maops-py logs analyze app.log --top 5 --bucket-seconds 60
+maops-py logs analyze app.log --repeat-threshold 3 --error-threshold 1
+
 # Equivalent module invocation
 python -m maops_pydevops --version
 python -m maops_pydevops doctor --format json
 python -m maops_pydevops config show --format json
 python -m maops_pydevops inventory system --format json
+python -m maops_pydevops logs parse app.log --format json
+python -m maops_pydevops logs analyze app.log --format json
 ```
 
 Exit codes: `0` success, `1` operational or required-check failure, `2`
@@ -128,7 +152,7 @@ breakdown.
 ```
 $ maops-py doctor
 MAOps Python DevOps Toolkit - Doctor Report
-Version:              0.3.0
+Version:              0.4.0
 Python version:       3.12.3
 Python executable:    /home/user/.venv/bin/python
 Operating system:     Linux 6.8.0
@@ -161,7 +185,7 @@ $ maops-py doctor --format json | python -m json.tool
 
 ```json
 {
-  "version": "0.3.0",
+  "version": "0.4.0",
   "python": {
     "version": "3.12.3",
     "executable": "/home/user/.venv/bin/python",
@@ -240,7 +264,7 @@ model and every supported key.
 ```bash
 $ maops-py tools inspect git kubectl
 MAOps Python DevOps Toolkit - Tool Inspection
-Version:     0.3.0
+Version:     0.4.0
 Config path: /home/user/.config/maops-py/config.toml
 
 Tools:
@@ -256,7 +280,7 @@ $ maops-py tools inspect git --format json | python -m json.tool
 
 ```json
 {
-    "version": "0.3.0",
+    "version": "0.4.0",
     "configuration": {
         "path": "/home/user/.config/maops-py/config.toml",
         "command_timeout_seconds": 10.0,
@@ -292,7 +316,7 @@ safety boundary.
 ```bash
 $ maops-py inventory system
 MAOps Python DevOps Toolkit - System Inventory
-Version:               0.3.0
+Version:               0.4.0
 Hostname:              myhost
 OS:                    Linux 6.8.0
 OS version:            #1 SMP ...
@@ -316,7 +340,7 @@ $ maops-py inventory system --format json | python -m json.tool
 
 ```json
 {
-    "version": "0.3.0",
+    "version": "0.4.0",
     "host": {
         "hostname": "myhost",
         "os_family": "Linux",
@@ -369,7 +393,7 @@ reference.
 ```bash
 $ maops-py inventory filesystem . --max-depth 1 --top 5
 MAOps Python DevOps Toolkit - Filesystem Inventory
-Version:            0.3.0
+Version:            0.4.0
 Root:               /home/user/project
 Max depth:          1
 Max entries:        10000
@@ -401,7 +425,7 @@ $ maops-py inventory filesystem . --max-depth 1 --top 5 --format json | python -
 
 ```json
 {
-    "version": "0.3.0",
+    "version": "0.4.0",
     "root": "/home/user/project",
     "options": {
         "max_depth": 1,
@@ -438,6 +462,169 @@ for the complete safety boundary. Only a root path that cannot be
 classified at all (nonexistent or inaccessible) causes a non-zero exit;
 recoverable per-entry issues during traversal never do.
 
+### Logs: parse
+
+```
+$ maops-py logs parse app.log
+MAOps Python DevOps Toolkit - Log Parse Report
+Version:            0.4.0
+Path:               /home/user/app.log
+Input format:       auto
+Max lines:          10000
+Max bytes:          10485760
+Max line bytes:     65536
+Max events:         1000
+Redaction enabled:  True
+
+Bytes read:         686
+Lines read:         5
+Blank lines:        0
+Events parsed:      4
+Events emitted:     4
+Malformed lines:    1
+Overlong lines:     0
+Line limit reached: False
+Byte limit reached: False
+Truncated:          False
+
+Events:
+  [ERROR    ] line      1 2026-08-06T04:00:00+00:00 smoke-api       database connection failed to 10.0.0.5
+  [ERROR    ] line      2 2026-08-06T04:00:05+00:00 smoke-api       database connection failed to 10.0.0.6
+  [WARNING  ] line      3 2026-08-06T04:00:10+00:00 smoke-api       password=[REDACTED] login attempt rejected
+  [ERROR    ] line      4 2026-08-06T04:00:15+00:00 smoke-svc       database connection failed to 10.0.0.7
+
+Issues:
+  [WARN] malformed_line       line 5: no recognizable timestamp
+
+Overall status: WARN
+```
+
+```bash
+$ maops-py logs parse app.log --format json | python -m json.tool
+```
+
+```json
+{
+    "version": "0.4.0",
+    "path": "/home/user/app.log",
+    "options": {
+        "input_format": "auto",
+        "max_lines": 10000,
+        "max_bytes": 10485760,
+        "max_line_bytes": 65536,
+        "max_events": 1000,
+        "redact": true
+    },
+    "summary": {
+        "bytes_read": 686,
+        "lines_read": 5,
+        "blank_lines": 0,
+        "events_parsed": 4,
+        "events_emitted": 4,
+        "malformed_lines": 1,
+        "overlong_lines": 0
+    },
+    "events": [
+        {
+            "line_number": 1,
+            "input_format": "jsonl",
+            "timestamp": "2026-08-06T04:00:00+00:00",
+            "timestamp_raw": "2026-08-06T04:00:00Z",
+            "hostname": "smoke-host",
+            "source": "smoke-api",
+            "pid": 1001,
+            "severity": "error",
+            "message": "database connection failed to 10.0.0.5",
+            "redacted": false
+        }
+    ],
+    "issues": [
+        {
+            "line_number": 5,
+            "code": "malformed_line",
+            "status": "warn",
+            "detail": "no recognizable timestamp"
+        }
+    ],
+    "line_limit_reached": false,
+    "byte_limit_reached": false,
+    "truncated": false,
+    "overall": "warn"
+}
+```
+
+(The real output includes all four parsed events; abbreviated here for
+readability. See [docs/log-parsing.md](docs/log-parsing.md) for the
+complete schema.)
+
+Secret redaction is on by default — the second event's `password=...`
+value never reaches this report. `--no-redact` disables it (see
+[docs/log-redaction.md](docs/log-redaction.md) for the risk). Only a
+file that cannot be opened at all, or a non-empty file with zero
+parseable events, causes a non-zero exit.
+
+### Logs: analyze
+
+```
+$ maops-py logs analyze app.log
+MAOps Python DevOps Toolkit - Log Analysis Report
+Version:            0.4.0
+Path:               /home/user/app.log
+...
+Top sources:
+       3  smoke-api
+       1  smoke-svc
+
+Top signatures:
+       3  (lines 1-4)  database connection failed to <ip>
+       1  (lines 3-3)  password=[redacted] login attempt rejected
+
+Findings:
+  [WARN] malformed_lines      1 line(s) could not be parsed
+  [WARN] error_volume         3 error-level event(s) at or above threshold 1
+
+Overall status: WARN
+```
+
+```bash
+$ maops-py logs analyze app.log --format json | python -m json.tool
+```
+
+```json
+{
+    "version": "0.4.0",
+    "severity_counts": {
+        "trace": 0, "debug": 0, "info": 0, "notice": 0, "warning": 1,
+        "error": 3, "critical": 0, "alert": 0, "emergency": 0, "unknown": 0
+    },
+    "source_counts": [
+        {"source": "smoke-api", "count": 3},
+        {"source": "smoke-svc", "count": 1}
+    ],
+    "top_signatures": [
+        {
+            "signature": "database connection failed to <ip>",
+            "count": 3,
+            "first_line": 1,
+            "last_line": 4,
+            "severity_counts": {"error": 3}
+        }
+    ],
+    "findings": [
+        {"code": "error_volume", "status": "warn", "detail": "3 error-level event(s) at or above threshold 1"}
+    ],
+    "overall": "warn"
+}
+```
+
+(Abbreviated for readability — see
+[docs/log-analysis.md](docs/log-analysis.md) for the complete schema.)
+Individual events are never retained for analysis; only small
+per-distinct-value aggregates are kept. Deterministic parsing,
+aggregation, and threshold comparisons only — no machine learning,
+artificial intelligence, behavioral detection, or general
+anomaly-detection claim.
+
 ## Quality commands
 
 ```bash
@@ -463,16 +650,22 @@ src/maops_pydevops/
         config.py             # config CLI orchestration
         tools.py                # allowlisted tool inspection
         inventory.py              # inventory CLI orchestration
+        logs.py                     # logs parse/analyze orchestration
     core/
         models.py             # enums + frozen dataclasses (doctor, tools)
         config_models.py         # config-domain enums + frozen dataclasses
         inventory_models.py        # inventory-domain enums + frozen dataclasses
+        log_models.py                 # log-domain enums + frozen dataclasses
         output.py                    # text/JSON rendering
         platform.py                    # injectable platform/python inspection
         config.py                        # config path/parse/validate/init
         runner.py                          # safe subprocess execution layer
         system_inventory.py                  # injectable host/OS/CPU/memory/uptime collection
         filesystem_inventory.py                # bounded, deterministic filesystem scanner
+        log_reader.py                            # fd-safe bounded binary log reader
+        log_parsers.py                             # jsonl/syslog/auto line parsers
+        log_redaction.py                             # bounded regex secret redaction
+        log_analysis.py                                # streaming aggregation, signatures, buckets
 tests/
     unit/
     integration/
@@ -483,6 +676,9 @@ docs/
     subprocess-safety.md
     inventory.md
     filesystem-inventory-safety.md
+    log-parsing.md
+    log-analysis.md
+    log-redaction.md
     roadmap.md
     troubleshooting.md
     engineering-reviews/
@@ -496,7 +692,7 @@ docs/
 
 ## Roadmap
 
-See [docs/roadmap.md](docs/roadmap.md) for what's implemented in v0.3.0
+See [docs/roadmap.md](docs/roadmap.md) for what's implemented in v0.4.0
 and what's under consideration for future releases.
 
 ## License

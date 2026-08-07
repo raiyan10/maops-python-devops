@@ -32,16 +32,22 @@ src/maops_pydevops/
         config.py          # config CLI orchestration, build_show_report()
         tools.py             # allowlisted tool inspection, build_inspect_report()
         inventory.py           # inventory CLI orchestration, build_system_report()/build_filesystem_report()
+        logs.py                  # logs CLI orchestration, build_log_parse_report()/build_log_analysis_report()
     core/
         models.py          # enums + frozen dataclasses (doctor, tools-inspect)
         config_models.py     # config-domain enums + frozen dataclasses
         inventory_models.py    # inventory-domain enums + frozen dataclasses
+        log_models.py             # log-domain enums + frozen dataclasses
         output.py               # text/JSON rendering, all report types
         platform.py                # injectable platform/python inspection
         config.py                    # config path/parse/validate/precedence/init
         runner.py                      # safe subprocess execution layer
         system_inventory.py              # injectable host/OS/CPU/memory/uptime collection
         filesystem_inventory.py            # bounded, deterministic filesystem scanner
+        log_reader.py                        # fd-safe bounded binary log reader
+        log_parsers.py                         # jsonl/syslog/auto line parsers
+        log_redaction.py                         # bounded regex secret redaction
+        log_analysis.py                            # streaming aggregation, signatures, buckets
 ```
 
 Parser construction (`build_parser()`) must never contain command logic;
@@ -53,15 +59,15 @@ inspect`'s `tool` positional validates against the allowlist in
 combination (`nargs="*"` + `choices=` + no explicit `default=`) had
 version-dependent behavior between Python 3.11 and 3.12 — do not
 reintroduce `choices=` on that positional without re-verifying against
-the full 3.11–3.14 matrix. `config`, `tools`, and `inventory` are
+the full 3.11–3.14 matrix. `config`, `tools`, `inventory`, and `logs` are
 two-level command groups (nested `add_subparsers`, `required=True` on the
 leaf level) — `config show`, `tools inspect`, `inventory system`,
-`inventory filesystem`, etc. `--version` is checked before subcommand
+`inventory filesystem`, `logs parse`, `logs analyze`, etc. `--version` is checked before subcommand
 dispatch in `main()`, so it short-circuits whenever `parser.parse_args()`
 itself succeeds — including alongside a complete subcommand path (e.g.
 `maops-py --version doctor`). It does **not** short-circuit an incomplete
 two-level group given with no leaf subcommand (`maops-py --version
-tools`/`config`/`inventory` alone still exit 2), because argparse's own
+tools`/`config`/`inventory`/`logs` alone still exit 2), because argparse's own
 `required=True` validation on the nested subparser raises a usage error
 during `parse_args()`, before `main()` ever inspects `args.version`. See
 `docs/subprocess-safety.md`'s "Exit-code and warning semantics across
@@ -101,6 +107,13 @@ differently per command (`doctor` vs. `tools inspect` vs. `inventory`).
   override (including raw `meminfo_lines`/`uptime_line` seams) for
   exactly this reason. Filesystem-inventory tests must always scan a
   `tmp_path`-scoped fixture tree, never the real repository tree.
+- Log-reader tests must never read a real system log file — every
+  fixture is a `tmp_path`-scoped file, and every fd-safety adversarial
+  condition (a symlink, a FIFO, a race between the safety check and the
+  open, an `O_NOATIME` permission fallback) is simulated via
+  `monkeypatch` rather than depending on real ownership/permission
+  state. Parser and analysis tests must never depend on the real host
+  clock, locale, or timezone.
 
 ## Security restrictions
 
@@ -145,6 +158,31 @@ target path, with or without `--force`, and never modifies an existing
 parent directory's permissions. See `docs/configuration.md` for the full
 contract.
 
+`core/log_reader.py` is the first module in this package to open and
+read file *content* rather than only metadata. It is the sole module
+permitted to `os.open()` a user-supplied path: it validates with
+`os.lstat()` first (rejecting nonexistent paths, directories, symlinks,
+and FIFOs/sockets/block/character devices), opens with
+`O_NOFOLLOW`/`O_CLOEXEC`/`O_NOATIME` where available, and verifies the
+opened descriptor via `os.fstat()` against a `(st_dev, st_ino)`
+comparison to the pre-open `lstat()` result (detecting a path replaced
+between the check and the open). It reads bounded, sequential binary
+chunks only — never `mmap`, never a whole-file read — and never writes
+to, or changes the mode/ownership/access/modification times of, the
+input file. `core/log_models.py`, `core/log_parsers.py`,
+`core/log_redaction.py`, and `core/log_analysis.py` never import
+`subprocess` or `socket`, never read named environment variables, never
+accept stdin input, never expand a glob, and never extract or
+decompress an archive. `logs parse`/`logs analyze` never serialize a
+complete raw line into any report field — an overlong line's content is
+dropped before it is ever buffered, and malformed-line issue details
+describe the failure without echoing the triggering line. Secret
+redaction (`core/log_redaction.py`) is enabled by default on the
+`message` field and is a best-effort mitigation for a fixed, documented
+pattern set, not a completeness guarantee — see `docs/log-parsing.md`,
+`docs/log-analysis.md`, and `docs/log-redaction.md` for the full
+contracts.
+
 ## Exit-code convention
 
 - `0` — success
@@ -158,6 +196,9 @@ deliberately decouple their `overall` report field from their exit code:
 both always exit `0` for a successfully-produced report regardless of
 `overall` being `pass` or `warn` — only a report that could not be built
 at all (an inaccessible/nonexistent filesystem root) exits `1`.
+`logs parse`/`logs analyze` follow the same convention, with one
+addition: a non-empty input that yields zero parseable events also
+exits `1`, in addition to the file itself being unreadable.
 
 ## Versioning policy
 

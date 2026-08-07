@@ -16,16 +16,22 @@ src/maops_pydevops/
         config.py           # config CLI orchestration: build_show_report(), etc.
         tools.py              # allowlisted tool inspection, build_inspect_report()
         inventory.py            # inventory CLI orchestration: build_system_report(), build_filesystem_report()
+        logs.py                   # logs CLI orchestration: build_log_parse_report(), build_log_analysis_report()
     core/
         models.py           # enums + frozen dataclasses (doctor, tools-inspect)
         config_models.py      # config-domain enums + frozen dataclasses
         inventory_models.py     # inventory-domain enums + frozen dataclasses
-        output.py                 # text/JSON rendering, all report types
-        platform.py                 # injectable platform/python inspection
-        config.py                     # config path/parse/validate/precedence/init
-        runner.py                       # safe subprocess execution layer
-        system_inventory.py               # injectable host/OS/CPU/memory/uptime collection
-        filesystem_inventory.py             # bounded, deterministic filesystem scanner
+        log_models.py             # log-domain enums + frozen dataclasses
+        output.py                   # text/JSON rendering, all report types
+        platform.py                   # injectable platform/python inspection
+        config.py                       # config path/parse/validate/precedence/init
+        runner.py                         # safe subprocess execution layer
+        system_inventory.py                 # injectable host/OS/CPU/memory/uptime collection
+        filesystem_inventory.py               # bounded, deterministic filesystem scanner
+        log_reader.py                           # fd-safe bounded binary log reader
+        log_parsers.py                            # jsonl/syslog/auto line parsers
+        log_redaction.py                            # bounded regex secret redaction
+        log_analysis.py                               # streaming aggregation, signatures, buckets
 ```
 
 ## 2. Entry points
@@ -175,6 +181,52 @@ cli.py:run_inventory_filesystem()
 See `docs/filesystem-inventory-safety.md` for the complete traversal,
 symlink, same-filesystem, and race-handling contract.
 
+## 4e. Data flow: logs parse
+
+```
+core/log_reader.py:open_bounded_log_file()   # os.lstat + O_NOFOLLOW/O_CLOEXEC/O_NOATIME
+                                              # open + os.fstat dev/inode TOCTOU check
+                                              # -> (BoundedLogReader, None, None) or
+                                              #    (None, LogReadFailureReason, detail)
+commands/logs.py:build_log_parse_report()
+    reader.read_lines()                      # bounded, sequential, never mmap/whole-file
+    core/log_parsers.py:parse_jsonl_line()/parse_syslog_line()/parse_auto_line()
+        core/log_redaction.py:redact_message()   # message field only, before event construction
+    -> core/log_models.py:LogParseReport (frozen dataclass)
+
+cli.py:run_logs_parse()
+    core/output.py:render_logs_parse_text() or render_logs_parse_json()
+    -> print once, exit 1 only if the file could not be opened at all
+       or overall is FAIL (non-empty input, zero parsed events)
+```
+
+`--max-events` bounds report *retention*, not parsing — every line is
+still parsed and counted in `events_parsed` regardless of the cap. See
+`docs/log-parsing.md` for the complete field and grammar contract.
+
+## 4f. Data flow: logs analyze
+
+```
+core/log_reader.py:open_bounded_log_file()   # identical to logs parse
+commands/logs.py:build_log_analysis_report()
+    reader.read_lines() -> per-line parse (same parsers/redaction as logs parse)
+    core/log_analysis.py:LogAnalysisState.process_event()   # one event at a time, discarded after
+        -> severity_counts, source_counts, per-signature aggregates, time buckets
+    core/log_analysis.py:build_findings()        # fixed-order, threshold-based, advisory
+    -> core/log_models.py:LogAnalysisReport (frozen dataclass)
+
+cli.py:run_logs_analyze()
+    core/output.py:render_logs_analyze_text() or render_logs_analyze_json()
+    -> print once, exit 1 only if the file could not be opened at all
+       or overall is FAIL (non-empty input, zero parsed events)
+```
+
+No individual `LogEvent` is retained across the streaming pass — only
+small per-distinct-value aggregates (`LogAnalysisState`). See
+`docs/log-analysis.md` for the aggregation, signature-normalization, and
+time-bucket contract, and `docs/log-redaction.md` for the redaction
+contract shared with `logs parse`.
+
 ## 5. Typed models
 
 `core/models.py` defines `CheckStatus` and `OutputFormat` as
@@ -194,7 +246,14 @@ sub-domains: a shared `InventoryIssue`; `HostInfo`, `DistributionInfo`,
 `SystemInventoryReport` for `inventory system`; `FilesystemScanOptions`,
 `FilesystemScanSummary`, `LargestFileEntry`, `FilesystemInventoryReport`
 for `inventory filesystem`. It reuses `CheckStatus` from `core/models.py`
-rather than defining a new status enum. Serialization never uses
+rather than defining a new status enum. `core/log_models.py` follows the
+same convention for the log domain: `LogSeverity`, `LogInputFormat`,
+`LogParseIssueCode`, `LogAnalysisFindingCode` as `StrEnum`; `LogEvent`,
+`LogParseIssue`, `LogParseReport`, `SignatureEntry`, `SourceCount`,
+`LogAnalysisTime`, `LogAnalysisFinding`, `LogAnalysisReport`, and their
+supporting option/summary dataclasses as `frozen=True`. It also reuses
+`CheckStatus` for report `overall` and finding/issue status, rather than
+introducing a fourth status enum. Serialization never uses
 `dataclasses.asdict()` or dict spreading — every
 field is written out explicitly so the JSON schema is traceable directly
 from the code. No custom exception classes are introduced anywhere: every
@@ -245,11 +304,23 @@ never read named environment variables — `inventory system` collects
 host/OS/CPU/memory/uptime facts via `platform`/`os` introspection only,
 and `inventory filesystem` reads only filesystem metadata
 (`os.lstat`/`os.scandir`/`entry.stat`), never file content, never a hash.
-No module performs network I/O or dumps the full environment. See
-`.claude/CLAUDE.md` for the full restriction list,
+No module performs network I/O or dumps the full environment.
+`core/log_reader.py` is the first module in this package to open and
+read file *content* (every other module reads only metadata or fixed
+subprocess output): it validates a path with `os.lstat()`, opens with
+`O_NOFOLLOW`/`O_CLOEXEC`/`O_NOATIME` where available, verifies the
+opened descriptor with `os.fstat()` against a `(st_dev, st_ino)`
+comparison to the pre-open `lstat()` result (detecting a file replaced
+between the check and the open), and reads bounded, sequential binary
+chunks — never `mmap`, never a whole-file read. `core/log_models.py`,
+`core/log_parsers.py`, `core/log_redaction.py`, and `core/log_analysis.py`
+never import `subprocess` or `socket`, and never read named environment
+variables. See `.claude/CLAUDE.md` for the full restriction list,
 `docs/subprocess-safety.md` / `docs/configuration.md` for those two
-modules' complete contracts, and `docs/inventory.md` /
-`docs/filesystem-inventory-safety.md` for the inventory modules'.
+modules' complete contracts, `docs/inventory.md` /
+`docs/filesystem-inventory-safety.md` for the inventory modules', and
+`docs/log-parsing.md` / `docs/log-analysis.md` / `docs/log-redaction.md`
+for the log modules'.
 
 ## 9. Tests
 
@@ -274,3 +345,12 @@ than a real, host-installed tool. `test_release_permissions.py` and
 output directory (`python -m build --outdir`) rather than the shared
 repository `dist/`, so they are safe to run concurrently with `make
 build`/`make quality` against the same working tree.
+
+Log-reader tests never read a real system log file: every fixture is a
+`tmp_path`-scoped file, including adversarial cases (a symlink, a FIFO,
+a file replaced between check and open via `monkeypatch`, paths with
+spaces/Unicode/shell metacharacters). Parser and analysis tests never
+depend on the real host clock or locale. `tests/integration/
+test_logs_cli_integration.py` exercises `logs parse`/`logs analyze`
+through both entry points as real subprocesses, the same way
+`test_inventory_cli_integration.py` does for `inventory`.
