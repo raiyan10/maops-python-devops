@@ -13,6 +13,7 @@ guarantee that every secret-shaped value is removed -- see
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 
 _KEY_NAMES = r"(?:api[_-]?key|access[_-]?key|password|passwd|pwd|token|secret)"
 
@@ -28,17 +29,31 @@ _REDACTION_RULES: tuple[re.Pattern[str], ...] = (
     #    "user:" and "@", redact only the password segment.
     re.compile(r"(?P<key>://[^:/@\s]+:)(?P<delim>)[^@\s]+(?=@)"),
     # 3. key=value / key: value style secrets -- keep the key name and
-    #    delimiter, and the surrounding quote characters if present.
+    #    delimiter, and the surrounding double quotes if present. A
+    #    quoted value may contain whitespace/punctuation up to the closing
+    #    quote; an unquoted value stops at the first delimiter-like
+    #    character. Python's ``re`` forbids reusing a group name across
+    #    alternatives, so the two branches use distinct names and a
+    #    replacement callback picks the right one.
     re.compile(
-        rf'(?i)\b(?P<key>{_KEY_NAMES})\b(?P<delim>\s*[:=]\s*)(?P<oq>")?'
-        r'(?P<value>[^"\s,;&]+)(?P<cq>")?'
+        rf"(?i)\b(?P<key>{_KEY_NAMES})\b(?P<delim>\s*[:=]\s*)"
+        r'(?:"(?P<qvalue>[^"]+)"|(?P<value>[^"\s,;&]+))'
     ),
 )
 
-_REPLACEMENTS: tuple[str, ...] = (
+
+def _replace_rule3(match: re.Match[str]) -> str:
+    key = match.group("key")
+    delim = match.group("delim")
+    if match.group("qvalue") is not None:
+        return f'{key}{delim}"[REDACTED]"'
+    return f"{key}{delim}[REDACTED]"
+
+
+_REPLACEMENTS: tuple[str | Callable[[re.Match[str]], str], ...] = (
     r"\g<key>\g<delim>[REDACTED]",
     r"\g<key>\g<delim>[REDACTED]",
-    r"\g<key>\g<delim>\g<oq>[REDACTED]\g<cq>",
+    _replace_rule3,
 )
 
 

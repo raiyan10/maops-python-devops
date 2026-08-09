@@ -49,9 +49,25 @@ See [`.claude/CLAUDE.md`](.claude/CLAUDE.md) for the full typing,
 testing, and security policy. In short: mypy strict, no untyped public
 functions, tests via `monkeypatch` rather than depending on the host
 environment, no shell invocation (`shell=True`, `os.system`) anywhere,
-no network access, and no import-time side effects. `core/runner.py` is
-the sole, narrowly scoped module permitted to import `subprocess` at
-all — see [docs/subprocess-safety.md](docs/subprocess-safety.md).
+and no import-time side effects. `core/runner.py` is the sole, narrowly
+scoped module permitted to import `subprocess` at all — see
+[docs/subprocess-safety.md](docs/subprocess-safety.md). Network access is
+similarly scoped: `core/health_http.py` and `core/health_tcp.py` are the
+only two modules permitted to import `socket`/`ssl`/`http.client` (the
+`health http`/`health tcp` commands), and `core/health_runner.py` is the
+only module permitted to import `concurrent.futures` — every other
+module still makes no network calls of any kind, which is enforced by a
+dedicated regression test
+(`tests/unit/test_no_network_health_boundary.py`). See
+[docs/http-health-safety.md](docs/http-health-safety.md) for the complete
+network safety model.
+
+Loopback-only integration tests for the health commands
+(`tests/integration/test_health_*_loopback.py`) use real
+`127.0.0.1`-bound, ephemeral-port servers/listeners via the
+`http_loopback_server`/`tcp_loopback_listener` fixtures in
+`tests/conftest.py` — never a public host, never a mock standing in for
+a real socket at the integration level.
 
 ## Commits and releases
 

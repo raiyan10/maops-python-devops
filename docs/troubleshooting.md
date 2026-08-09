@@ -161,3 +161,35 @@ correct behavior rather than degraded data. A `logs analyze` run over a
 BSD-only file will show `time.timestamped_events: 0` and an empty peak
 bucket for the same reason — see `docs/log-parsing.md` and
 `docs/log-analysis.md`.
+
+## 18. `maops-py health http`/`health tcp` exits `1` even though one target succeeded
+
+Check `overall` and each result's `status` — `1` means at least one
+target's status is `"fail"` (never recovered across all attempts), even
+if other targets in the same invocation are `"pass"`/`"warn"`. A target
+that fails its first attempt but recovers on a retry is `"warn"`, not
+`"fail"`, and still contributes to an overall `0` exit unless another
+target genuinely failed. See `docs/health-checks.md` for the complete
+PASS/WARN/FAIL and exit-code semantics.
+
+## 19. `maops-py health http`/`health tcp` exits `2` for a target that "looks fine"
+
+This is a usage/validation error, checked before any connection is
+attempted — common causes: URL userinfo (`http://user:pass@host/`,
+rejected outright), an unsupported scheme (only `http`/`https`), a
+malformed TCP target (missing port, an unbracketed IPv6 literal, a port
+range or comma-separated port list, a CIDR), or supplying more than 100
+targets in one invocation. The printed `Error:` message names which
+target (`target N: ...`) and why. See `docs/health-checks.md`'s target
+syntax sections.
+
+## 20. `maops-py health http`'s JSON output shows a different URL than what I typed
+
+Query parameter *values* are redacted in the report's `target` field
+(keys and their order are preserved) — this is intentional, so a
+token-authenticated health-check URL doesn't leak its credential into
+logs/CI output. The fragment (`#...`) is also always dropped, and
+userinfo is rejected before validation even completes. The *actual*
+request made to the server still uses the real, unredacted query string
+— only what's displayed in the report is sanitized. See
+`docs/http-health-safety.md`'s "URL privacy" section.

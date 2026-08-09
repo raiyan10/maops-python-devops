@@ -36,7 +36,11 @@ _UUID_RE = re.compile(
     r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b"
 )
 _IPV4_RE = re.compile(r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b")
-_HEX_RE = re.compile(r"\b[0-9a-fA-F]{8,}\b")
+#: Requires at least one true hex letter (a-f/A-F) via lookahead, so a
+#: purely decimal 8+-digit token (e.g. an order ID) is never misclassified
+#: as hex -- decimal digits alone are also matched by this character
+#: class, but should normalize to <num> instead (Day 4 finding).
+_HEX_RE = re.compile(r"\b(?=[0-9a-fA-F]*[a-fA-F])[0-9a-fA-F]{8,}\b")
 _INT_RE = re.compile(r"(?<![\w.])\d+(?![\w.])")
 _WHITESPACE_RE = re.compile(r"\s+")
 
@@ -53,8 +57,8 @@ def compute_signature(message: str) -> str:
     """
     text = _UUID_RE.sub("<uuid>", message)
     text = _IPV4_RE.sub("<ip>", text)
-    text = _HEX_RE.sub("<hex>", text)
     text = _INT_RE.sub("<num>", text)
+    text = _HEX_RE.sub("<hex>", text)
     text = _WHITESPACE_RE.sub(" ", text).strip()
     text = text.casefold()
     return text[:_SIGNATURE_MAX_LENGTH]

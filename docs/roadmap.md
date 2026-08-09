@@ -90,7 +90,41 @@ and `output_format` only.
 - Still zero third-party runtime dependencies: `re`/`datetime` (both
   standard library) are the only additions.
 
-## Post-v0.4.0 possibilities
+## Completed in v0.5.0
+
+- `maops-py health http URL [URL ...] [--method GET|HEAD] [--expect-status
+  STATUS|STATUS-STATUS] [--timeout SECONDS] [--retries N] [--retry-delay
+  SECONDS] [--workers N] [--format text|json]` — bounded HTTP availability
+  checks via `http.client` (never `urllib.request`), with mandatory TLS
+  certificate/hostname verification and no `--insecure` option, no
+  request bodies, no response-body/header retention, and redirects never
+  followed. See `docs/health-checks.md` and `docs/http-health-safety.md`.
+- `maops-py health tcp TARGET [TARGET ...] [--timeout SECONDS] [--retries
+  N] [--retry-delay SECONDS] [--workers N] [--format text|json]` —
+  bounded, connect-only TCP checks (`hostname:port`, `IPv4:port`,
+  `[IPv6]:port`); no application data sent, no banner read, no TLS
+  handshake for a generic TCP target.
+- The package's first intentional network access, deliberately isolated
+  to `core/health_http.py`/`core/health_tcp.py` (the only two modules
+  permitted to import `socket`/`ssl`/`http.client`) and
+  `core/health_runner.py` (the only module permitted to import
+  `concurrent.futures`) — every other command's existing network
+  prohibition is unchanged and regression-tested.
+- Deterministic per-target retry policy (`attempts = retries + 1`, fixed
+  non-jittered delay) and bounded `ThreadPoolExecutor` concurrency (1-32
+  workers, 1-100 targets), with report ordering that always matches
+  original CLI target order regardless of completion order.
+- Ten Day 4 carry-forward findings resolved: quoted-secret whitespace
+  leak in redaction, byte-limit mid-line truncation fragment handling,
+  smoke-install secret-absence assertions, RFC 3339 lowercase `z`
+  handling, signature decimal/hex misclassification, PID magnitude
+  bounds, `logs parse` text-output hostname rendering, a stale example
+  version in `docs/inventory.md`, and several test-quality cleanups.
+- Still zero third-party runtime dependencies: `http.client`, `ssl`,
+  `socket`, `ipaddress`, `concurrent.futures`, and `urllib.parse` are all
+  standard library.
+
+## Post-v0.5.0 possibilities
 
 These are not committed, scheduled, or designed yet — listed only as
 plausible next steps, to be scoped on their own day:
@@ -109,3 +143,11 @@ plausible next steps, to be scoped on their own day:
   parses each physical line independently, with no CLI override.
 - A configurable additional secret-pattern list for `logs`' redaction
   pass, beyond the fixed set Day 4 ships with.
+- Comma-separated `--expect-status` lists for `health http`, should a
+  real use case for it emerge — Day 5 deliberately supports exactly one
+  value or one range, with no CLI override.
+- Custom request headers or authentication for `health http`, should a
+  real use case for it emerge — Day 5 deliberately ships neither. TLS
+  certificate/hostname verification staying mandatory, with no bypass
+  option, is a deliberate safety invariant of this feature, not merely a
+  Day 5 scoping gap.

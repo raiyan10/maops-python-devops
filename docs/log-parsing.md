@@ -69,11 +69,12 @@ precedence key that happens to be populated:
 - `hostname`/`source` must be strings when present; a non-string value
   becomes `null` in the event plus an `invalid_field_type` issue — the
   event is still emitted.
-- `pid` must be a non-negative integer or absent/`null`. A boolean is
-  explicitly rejected even though Python's `bool` is technically an
-  `int` subtype; a string, float, or negative integer is also rejected.
-  An invalid `pid` becomes `null` plus an `invalid_field_type` issue,
-  the event is still emitted.
+- `pid` must be an integer in range `0`-`2147483647` (inclusive), or
+  absent/`null`. A boolean is explicitly rejected even though Python's
+  `bool` is technically an `int` subtype; a string, float, negative
+  integer, or a value above `2147483647` is also rejected. An invalid
+  `pid` becomes `null` plus an `invalid_field_type` issue, the event is
+  still emitted — an out-of-range value is never serialized verbatim.
 - `severity` follows the same normalization as syslog — see "Severity
   normalization" below.
 - Extra keys are read only through the alias lookups above; nothing
@@ -89,7 +90,9 @@ supporting:
   timestamp.
 - A hostname (the next whitespace-delimited token).
 - A `source[pid]: message` tail — `source` is read up to an optional
-  `[pid]` (numeric only) and the first colon; everything after that
+  `[pid]` (numeric only, and bounded to `0`-`2147483647`; a larger value
+  degrades to `pid: null` plus an `invalid_field_type` issue rather than
+  being serialized verbatim) and the first colon; everything after that
   colon, including further colons, is the message verbatim.
 
 PRI severity mapping (`severity = PRI % 8`, facility bits are ignored —
@@ -122,8 +125,10 @@ Uses only standard-library `datetime` functionality (`fromisoformat`,
 `astimezone`) — no third-party date-parsing library.
 
 - Timezone-aware ISO-8601/RFC3339 strings are accepted, including a
-  trailing `Z`, and normalized to UTC (`timestamp`). The original string
-  is always preserved verbatim in `timestamp_raw`.
+  trailing `Z` or lowercase `z` (RFC 3339 §5.6 explicitly permits both,
+  as it does the lowercase `t` date/time separator), and normalized to
+  UTC (`timestamp`) regardless of case. The original string is always
+  preserved verbatim in `timestamp_raw`.
 - A **naive** ISO timestamp (no offset, no `Z`) parses successfully as a
   string but produces `timestamp: null` — never an issue, since this is
   documented, expected behavior, not degraded data.
@@ -172,6 +177,18 @@ in `summary.overlong_lines` and reported as one `overlong_line` issue
 per occurrence. `line_limit_reached`/`byte_limit_reached` are `true`
 only when more data genuinely existed beyond the configured cap — never
 merely because a file happened to end exactly at the limit.
+
+When `--max-bytes` is exhausted **in the middle of a physical line**
+(more data existed beyond the cut point), that trailing partial line is a
+truncation artifact, not valid content: it is never decoded or treated as
+a genuine (if unterminated) final line. It is skipped, and reported as
+one `truncated_fragment` issue, distinct from a normal `overlong_line`
+issue (which means a *complete* physical line exceeded
+`--max-line-bytes`; a `truncated_fragment` means the byte budget itself
+ran out mid-line). If the file simply ends without a trailing newline at
+or before the byte budget — no more data exists beyond it — the final
+line is still parsed normally; only a genuine mid-line cutoff produces
+this issue.
 
 ## Empty and malformed files
 

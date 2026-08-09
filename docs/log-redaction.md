@@ -42,8 +42,12 @@ last only has to catch what they didn't):
    `passwd`, `pwd`, `token`, `api_key`/`api-key`/`apikey`,
    `secret`, `access_key`/`access-key`. The key name and its delimiter
    (`=` or `:`, with surrounding whitespace) are preserved; surrounding
-   quote characters are preserved if present. Only the value is
-   replaced.
+   double-quote characters are preserved if present. Only the value is
+   replaced. **A double-quoted value may contain internal whitespace and
+   punctuation** — `password="correct horse battery" trailing` redacts
+   the entire quoted phrase (`password="[REDACTED]" trailing`), not just
+   the text up to the first space. An unquoted value still stops at the
+   first whitespace, comma, semicolon, or ampersand, as before.
 
 Every matched value is replaced with the literal text `[REDACTED]`.
 Multiple secrets in the same message are each redacted independently.

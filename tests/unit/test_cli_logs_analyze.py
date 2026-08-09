@@ -10,14 +10,6 @@ import pytest
 from maops_pydevops.cli import EXIT_FAILURE, EXIT_SUCCESS, EXIT_USAGE_ERROR, main
 
 
-@pytest.fixture(autouse=True)
-def _isolated_config_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("HOME", str(tmp_path / "isolated-home"))
-    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
-    monkeypatch.delenv("MAOPS_PY_CONFIG_FILE", raising=False)
-    monkeypatch.delenv("MAOPS_PY_OUTPUT_FORMAT", raising=False)
-
-
 def _write_log(tmp_path: Path, *lines: str) -> Path:
     path = tmp_path / "test.log"
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")

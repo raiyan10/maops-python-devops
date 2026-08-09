@@ -48,11 +48,19 @@ _FAILURE_DETAILS: dict[LogReadFailureReason, str] = {
 
 @dataclass(frozen=True)
 class RawLogLine:
-    """One decoded logical line, or a marker for a skipped overlong line."""
+    """One decoded logical line, or a marker for a skipped/truncated line.
+
+    ``overlong`` marks a line longer than ``max_line_bytes`` (content
+    dropped before decoding). ``truncated_fragment`` marks the final
+    partial physical line left in the buffer when ``max_bytes`` was
+    exhausted mid-line -- this fragment is never decoded or treated as
+    genuine content; it is a truncation artifact, not a short line.
+    """
 
     line_number: int
     text: str
     overlong: bool
+    truncated_fragment: bool = False
 
 
 def _strip_trailing_cr(data: bytes) -> bytes:
@@ -203,14 +211,23 @@ class BoundedLogReader:
             self.overlong_lines_skipped += 1
             yield RawLogLine(line_number=line_number, text="", overlong=True)
         elif buffer:
-            raw = _strip_trailing_cr(bytes(buffer))
             line_number += 1
             self.lines_read += 1
-            yield RawLogLine(
-                line_number=line_number,
-                text=raw.decode("utf-8", errors="replace"),
-                overlong=False,
-            )
+            if self.byte_limit_reached:
+                # More data existed beyond max_bytes: this trailing buffer
+                # is a genuine mid-line truncation artifact, not a valid
+                # (if unterminated) final line -- skip it rather than
+                # decoding a fragment as if it were complete content.
+                yield RawLogLine(
+                    line_number=line_number, text="", overlong=False, truncated_fragment=True
+                )
+            else:
+                raw = _strip_trailing_cr(bytes(buffer))
+                yield RawLogLine(
+                    line_number=line_number,
+                    text=raw.decode("utf-8", errors="replace"),
+                    overlong=False,
+                )
 
 
 def _open_regular_file(path: str) -> tuple[int | None, LogReadFailureReason | None, str | None]:

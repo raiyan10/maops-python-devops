@@ -16,12 +16,22 @@ without creating or reading anything.
 
 This configuration file is consumed by `tools inspect` (for
 `command_timeout_seconds`, `max_output_bytes`, and a default
-`--format`) and `config show` (which reports it back). `doctor` and
-both `inventory` commands (`inventory system`, `inventory filesystem`)
-never read it: their `--format` always defaults to `text`, so an
-invalid or malformed configuration file never affects their exit code.
-See `docs/inventory.md` for why this was deliberately chosen for
+`--format`), `logs parse`/`logs analyze` and `health http`/`health tcp`
+(for a default `--format` only — neither reads `command_timeout_seconds`
+or `max_output_bytes`), and `config show` (which reports it back).
+`doctor` and both `inventory` commands (`inventory system`, `inventory
+filesystem`) never read it: their `--format` always defaults to `text`,
+so an invalid or malformed configuration file never affects their exit
+code. See `docs/inventory.md` for why this was deliberately chosen for
 `inventory` specifically.
+
+`health http`/`health tcp`'s other flags (`--timeout`, `--retries`,
+`--retry-delay`, `--workers`, `--method`, `--expect-status`) are
+**command defaults only** — Day 5 deliberately introduces no new
+persistent configuration keys for them. `--format` is the only
+`health`-related value this configuration file can influence, resolved
+via the identical CLI > environment > file > default precedence used
+everywhere else in this document.
 
 ## Supported keys
 

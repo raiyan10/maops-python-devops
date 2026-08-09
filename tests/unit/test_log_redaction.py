@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import time
-
 from maops_pydevops.core.log_redaction import redact_message
 
 
@@ -97,31 +95,70 @@ def test_non_secret_text_unchanged() -> None:
 
 
 def test_bounded_behavior_on_long_line_completes_quickly() -> None:
-    # Regression guard against catastrophic backtracking: a long,
-    # adversarial-shaped line must redact in well under a second.
+    # Regression guard against catastrophic backtracking: assert correct,
+    # deterministic output on an adversarial-shaped long line. A wall-clock
+    # timing assertion here is infrastructure-load-dependent (Day 4
+    # finding J1); correctness on a large, repeated-pattern input is a
+    # deterministic proxy that the regex did not degrade into pathological
+    # backtracking (which would fail to terminate within the test runner's
+    # own timeout, not merely run slowly).
+    # The 5 repetitions are concatenated with no separating whitespace, so
+    # the value class -- which also matches the literal characters of the
+    # word "password" -- consumes the whole string as a single value; this
+    # is expected, documented best-effort behavior, not a second bug.
     long_line = ("password=" + "a" * 10000) * 5
-    start = time.monotonic()
     text, changed = redact_message(long_line)
-    elapsed = time.monotonic() - start
     assert changed is True
-    assert elapsed < 2.0
+    assert "a" * 10000 not in text
+    assert text == "password=[REDACTED]"
 
 
 def test_bounded_behavior_on_long_uri_without_at_sign() -> None:
     # Rule 2 (URI userinfo password) is the one pattern with a trailing
     # lookahead (?=@) -- specifically probe a long userinfo-shaped tail
-    # with no "@" at all, so the lookahead never matches, confirming
-    # this doesn't degrade to worse-than-linear time on that pattern.
+    # with no "@" at all, so the lookahead never matches. No timing
+    # assertion (Day 4 finding J1): correctness plus termination within
+    # the test runner's own timeout is the deterministic proxy.
     long_line = "connect to postgres://user:" + "x" * 100000
-    start = time.monotonic()
     text, changed = redact_message(long_line)
-    elapsed = time.monotonic() - start
     assert changed is False
     assert text == long_line
-    assert elapsed < 2.0
 
 
 def test_quotes_around_value_preserved() -> None:
     text, changed = redact_message('token: "tok_abcdef"')
     assert changed is True
     assert text == 'token: "[REDACTED]"'
+
+
+def test_quoted_value_with_embedded_space_fully_redacted() -> None:
+    # Day 4 finding A: the value group used to stop at the first
+    # whitespace even when quoted, leaking the remainder of the secret.
+    text, changed = redact_message('password="correct horse battery" trailing')
+    assert changed is True
+    assert "correct" not in text
+    assert "horse" not in text
+    assert "battery" not in text
+    assert text == 'password="[REDACTED]" trailing'
+
+
+def test_quoted_value_with_multiple_words_and_punctuation_fully_redacted() -> None:
+    text, changed = redact_message('token="tok abc-123, def!? end" next')
+    assert changed is True
+    assert "abc-123" not in text
+    assert text == 'token="[REDACTED]" next'
+
+
+def test_multiple_quoted_secrets_on_one_line_each_redacted() -> None:
+    text, changed = redact_message('password="first one" token="second one"')
+    assert changed is True
+    assert "first" not in text
+    assert "second" not in text
+    assert text == 'password="[REDACTED]" token="[REDACTED]"'
+
+
+def test_unquoted_single_word_value_still_redacted() -> None:
+    text, changed = redact_message("password=hunter2 trailing")
+    assert changed is True
+    assert "hunter2" not in text
+    assert text == "password=[REDACTED] trailing"

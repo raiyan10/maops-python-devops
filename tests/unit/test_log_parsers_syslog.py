@@ -108,6 +108,24 @@ def test_oversized_pid_digit_run_does_not_raise_value_error() -> None:
     assert event is not None
     assert event.pid is None
     assert event.source == "mysvc"
+
+
+def test_pid_at_max_bound_accepted() -> None:
+    # Day 4 finding G: pid is bounded to 0-2147483647.
+    line = "2026-08-06T10:30:00Z host mysvc[2147483647]: m"
+    event, issue = parse_syslog_line(line, 1, redact=True)
+    assert event is not None
+    assert event.pid == 2147483647
+    assert issue is None
+
+
+def test_pid_above_max_bound_rejected() -> None:
+    line = "2026-08-06T10:30:00Z host mysvc[2147483648]: m"
+    event, issue = parse_syslog_line(line, 1, redact=True)
+    assert event is not None
+    assert event.pid is None
+    assert issue is not None
+    assert issue.code is LogParseIssueCode.INVALID_FIELD_TYPE
     assert issue is not None
     assert issue.code is LogParseIssueCode.INVALID_FIELD_TYPE
 

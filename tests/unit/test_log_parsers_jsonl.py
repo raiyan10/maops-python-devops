@@ -198,6 +198,23 @@ def test_bool_pid_rejected() -> None:
     assert issue.code is LogParseIssueCode.INVALID_FIELD_TYPE
 
 
+def test_pid_at_max_bound_accepted() -> None:
+    # Day 4 finding G: pid is bounded to 0-2147483647.
+    event, issue = parse_jsonl_line(json.dumps({"message": "m", "pid": 2147483647}), 1, redact=True)
+    assert event is not None
+    assert event.pid == 2147483647
+    assert issue is None
+
+
+def test_pid_above_max_bound_rejected_and_not_serialized() -> None:
+    event, issue = parse_jsonl_line(json.dumps({"message": "m", "pid": 2147483648}), 1, redact=True)
+    assert event is not None
+    assert event.pid is None
+    assert issue is not None
+    assert issue.code is LogParseIssueCode.INVALID_FIELD_TYPE
+    assert "2147483648" not in event.to_dict().__str__()
+
+
 def test_extra_fields_ignored_and_never_serialized() -> None:
     payload = {"message": "m", "unexpected_field": "should not appear", "another": 42}
     event, issue = parse_jsonl_line(json.dumps(payload), 1, redact=True)
@@ -330,7 +347,7 @@ def test_only_first_issue_kept_pid_before_timestamp() -> None:
     event, issue = parse_jsonl_line(json.dumps(payload), 1, redact=True)
     assert event is not None
     assert issue is not None
-    assert issue.detail == "pid field is not a non-negative integer"
+    assert issue.detail == "pid field is not an integer in range 0-2147483647"
 
 
 def test_only_first_issue_kept_pid_before_non_string_timestamp() -> None:
@@ -342,7 +359,7 @@ def test_only_first_issue_kept_pid_before_non_string_timestamp() -> None:
     assert event is not None
     assert event.timestamp_raw == "12345"
     assert issue is not None
-    assert issue.detail == "pid field is not a non-negative integer"
+    assert issue.detail == "pid field is not an integer in range 0-2147483647"
 
 
 def test_no_arbitrary_field_serialization_only_documented_fields() -> None:
