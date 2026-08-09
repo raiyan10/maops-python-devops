@@ -5,6 +5,7 @@ fd verification, and no unwanted filesystem side effects.
 from __future__ import annotations
 
 import os
+import socket
 import stat
 import sys
 from pathlib import Path
@@ -56,6 +57,23 @@ def test_fifo_rejected(tmp_path: Path) -> None:
     reader, reason, detail = open_bounded_log_file(str(fifo_path), **_LIMITS)
     assert reader is None
     assert reason is LogReadFailureReason.NOT_REGULAR_FILE
+
+
+@pytest.mark.skipif(not hasattr(socket, "AF_UNIX"), reason="AF_UNIX not supported on this platform")
+def test_af_unix_socket_special_file_rejected(tmp_path: Path) -> None:
+    # Day 4 finding J2: the only prior special-file rejection test that
+    # exercised a real, live non-regular file was the FIFO case above; the
+    # socket case elsewhere only mocked os.fstat. This binds a genuine
+    # AF_UNIX socket special file on disk and proves it is rejected live.
+    socket_path = tmp_path / "a.sock"
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        sock.bind(str(socket_path))
+        reader, reason, detail = open_bounded_log_file(str(socket_path), **_LIMITS)
+        assert reader is None
+        assert reason is LogReadFailureReason.NOT_REGULAR_FILE
+    finally:
+        sock.close()
 
 
 def test_path_with_spaces_accepted(tmp_path: Path) -> None:

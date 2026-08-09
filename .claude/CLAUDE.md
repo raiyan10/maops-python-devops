@@ -33,21 +33,26 @@ src/maops_pydevops/
         tools.py             # allowlisted tool inspection, build_inspect_report()
         inventory.py           # inventory CLI orchestration, build_system_report()/build_filesystem_report()
         logs.py                  # logs CLI orchestration, build_log_parse_report()/build_log_analysis_report()
+        health.py                  # health CLI orchestration, build_health_http_report()/build_health_tcp_report()
     core/
         models.py          # enums + frozen dataclasses (doctor, tools-inspect)
         config_models.py     # config-domain enums + frozen dataclasses
         inventory_models.py    # inventory-domain enums + frozen dataclasses
         log_models.py             # log-domain enums + frozen dataclasses
-        output.py               # text/JSON rendering, all report types
-        platform.py                # injectable platform/python inspection
-        config.py                    # config path/parse/validate/precedence/init
-        runner.py                      # safe subprocess execution layer
-        system_inventory.py              # injectable host/OS/CPU/memory/uptime collection
-        filesystem_inventory.py            # bounded, deterministic filesystem scanner
-        log_reader.py                        # fd-safe bounded binary log reader
-        log_parsers.py                         # jsonl/syslog/auto line parsers
-        log_redaction.py                         # bounded regex secret redaction
-        log_analysis.py                            # streaming aggregation, signatures, buckets
+        health_models.py            # health-domain enums + frozen dataclasses
+        output.py                     # text/JSON rendering, all report types
+        platform.py                     # injectable platform/python inspection
+        config.py                         # config path/parse/validate/precedence/init
+        runner.py                           # safe subprocess execution layer
+        system_inventory.py                   # injectable host/OS/CPU/memory/uptime collection
+        filesystem_inventory.py                 # bounded, deterministic filesystem scanner
+        log_reader.py                             # fd-safe bounded binary log reader
+        log_parsers.py                              # jsonl/syslog/auto line parsers
+        log_redaction.py                              # bounded regex secret redaction
+        log_analysis.py                                 # streaming aggregation, signatures, buckets
+        health_http.py                                    # bounded HTTP availability checks (network-capable)
+        health_tcp.py                                       # bounded TCP connect checks (network-capable)
+        health_runner.py                                      # bounded, ordered concurrent.futures helper
 ```
 
 Parser construction (`build_parser()`) must never contain command logic;
@@ -59,20 +64,22 @@ inspect`'s `tool` positional validates against the allowlist in
 combination (`nargs="*"` + `choices=` + no explicit `default=`) had
 version-dependent behavior between Python 3.11 and 3.12 — do not
 reintroduce `choices=` on that positional without re-verifying against
-the full 3.11–3.14 matrix. `config`, `tools`, `inventory`, and `logs` are
-two-level command groups (nested `add_subparsers`, `required=True` on the
-leaf level) — `config show`, `tools inspect`, `inventory system`,
-`inventory filesystem`, `logs parse`, `logs analyze`, etc. `--version` is checked before subcommand
+the full 3.11–3.14 matrix. `config`, `tools`, `inventory`, `logs`, and
+`health` are two-level command groups (nested `add_subparsers`,
+`required=True` on the leaf level) — `config show`, `tools inspect`,
+`inventory system`, `inventory filesystem`, `logs parse`, `logs analyze`,
+`health http`, `health tcp`, etc. `--version` is checked before subcommand
 dispatch in `main()`, so it short-circuits whenever `parser.parse_args()`
 itself succeeds — including alongside a complete subcommand path (e.g.
 `maops-py --version doctor`). It does **not** short-circuit an incomplete
 two-level group given with no leaf subcommand (`maops-py --version
-tools`/`config`/`inventory`/`logs` alone still exit 2), because argparse's own
-`required=True` validation on the nested subparser raises a usage error
-during `parse_args()`, before `main()` ever inspects `args.version`. See
-`docs/subprocess-safety.md`'s "Exit-code and warning semantics across
-commands" section for how `warn`-level conditions map to exit codes
-differently per command (`doctor` vs. `tools inspect` vs. `inventory`).
+tools`/`config`/`inventory`/`logs`/`health` alone still exit 2), because
+argparse's own `required=True` validation on the nested subparser raises
+a usage error during `parse_args()`, before `main()` ever inspects
+`args.version`. See `docs/subprocess-safety.md`'s "Exit-code and warning
+semantics across commands" section for how `warn`-level conditions map to
+exit codes differently per command (`doctor` vs. `tools inspect` vs.
+`inventory` vs. `health`).
 
 ## Typing policy
 
@@ -118,10 +125,14 @@ differently per command (`doctor` vs. `tools inspect` vs. `inventory`).
 ## Security restrictions
 
 No `shell=True`, `os.system`, `eval`, `exec`, `pickle`, `sudo`, service or
-process mutation, network requests, environment-variable dumping, secret
-or token collection, writes outside build/test temp directories, silent
-exception swallowing, import-time side effects, or global logging
-configuration on import.
+process mutation, environment-variable dumping, secret or token
+collection, writes outside build/test temp directories, silent exception
+swallowing, import-time side effects, or global logging configuration on
+import. Network access is forbidden everywhere **except**
+`core/health_http.py`/`core/health_tcp.py` (and their orchestration via
+`core/health_runner.py`/`commands/health.py`) — see the `core/health_*.py`
+paragraph below for the full, narrowly scoped exception and
+`docs/http-health-safety.md` for its complete contract.
 
 `commands/doctor.py`'s optional tool checks use `shutil.which()` only —
 never subprocess execution. `core/runner.py` is the sole, narrowly
@@ -183,6 +194,40 @@ pattern set, not a completeness guarantee — see `docs/log-parsing.md`,
 `docs/log-analysis.md`, and `docs/log-redaction.md` for the full
 contracts.
 
+`core/health_http.py` and `core/health_tcp.py` are the only two modules
+in this package permitted to make network connections, and the only two
+permitted to import `socket`, `ssl`, or `http.client`;
+`core/health_runner.py` is the only module permitted to import
+`concurrent.futures`. Every other module in the package — including
+`core/runner.py` outside its established subprocess use — retains its
+existing "no network" invariant unchanged, verified by
+`tests/unit/test_no_network_health_boundary.py`. HTTP requests use
+`http.client` directly, never `urllib.request` (which would consult
+proxy environment variables and could follow redirects implicitly).
+HTTPS always validates certificates and hostnames via
+`ssl.create_default_context()` with zero attribute relaxation anywhere —
+there is no `--insecure` flag and no other certificate-verification
+bypass in this package. Redirects are never followed: a `3xx` response
+is reported as received, using ordinary expected-status logic. Only
+`GET` and `HEAD` are supported, never with a request body; there is no
+CLI flag, environment variable, or configuration key that can inject a
+custom header or credential — URL userinfo is rejected outright as a
+usage error. Response bodies (`.read()`/`.readinto()`/iteration) and
+response headers (`.getheaders()`/`.headers`) are never accessed
+anywhere, and a response's `reason` phrase is never serialized — every
+report `detail` is a fixed, package-generated string from a closed
+failure-reason enum, never arbitrary exception or server-controlled
+text. TCP checks are connect-only: `socket.create_connection(...)`
+followed by `getpeername()` and `close()`, with no `send`/`recv` call
+anywhere. Target syntax accepts exactly one explicit host+port (or URL)
+per string — no CIDR expansion, port ranges, comma-separated ports, or
+host/subnet discovery of any kind. A validated target's URL report field
+has its query *values* redacted (keys and order preserved) and its
+fragment/userinfo permanently stripped; the original raw command-line
+string is never retained on any object. See `docs/health-checks.md` and
+`docs/http-health-safety.md` for the complete CLI/report/safety
+contracts.
+
 ## Exit-code convention
 
 - `0` — success
@@ -199,6 +244,12 @@ at all (an inaccessible/nonexistent filesystem root) exits `1`.
 `logs parse`/`logs analyze` follow the same convention, with one
 addition: a non-empty input that yields zero parseable events also
 exits `1`, in addition to the file itself being unreadable.
+`health http`/`health tcp` use a three-way per-target
+`pass`/`warn`/`fail` status (`warn` means a target recovered during
+retries): report `overall` of `pass` or `warn` exits `0`, `fail` exits
+`1`, and a target-count/syntax/privacy validation failure — checked
+before any connection is attempted — exits `2`. See
+`docs/health-checks.md` for the complete semantics.
 
 ## Versioning policy
 

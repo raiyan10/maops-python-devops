@@ -67,7 +67,16 @@ def test_no_module_imports_logging() -> None:
         assert "import logging" not in text, f"unexpected logging import in {path}"
 
 
-def test_no_module_imports_socket() -> None:
+def test_only_health_modules_import_socket() -> None:
+    # Day 5 introduces the package's first intentional network access,
+    # isolated to core/health_http.py and core/health_tcp.py -- every
+    # other module retains the prior "no socket" invariant unchanged. See
+    # tests/unit/test_health_no_forbidden_tokens.py and
+    # tests/unit/test_no_network_health_boundary.py for the full
+    # network-boundary regression coverage.
+    permitted = {"health_http.py", "health_tcp.py"}
     for path in SRC_ROOT.rglob("*.py"):
+        if path.name in permitted:
+            continue
         text = path.read_text(encoding="utf-8")
         assert "import socket" not in text, f"unexpected socket import in {path}"

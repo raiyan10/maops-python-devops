@@ -34,8 +34,13 @@ _PID_KEYS: tuple[str, ...] = ("pid", "process_id")
 
 _PRI_RE = re.compile(r"^<(\d{1,3})>")
 _RFC3339_RE = re.compile(
-    r"^(\d{4}-\d{2}-\d{2}[Tt ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2}))(?=\s|$)"
+    r"^(\d{4}-\d{2}-\d{2}[Tt ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[Zz]|[+-]\d{2}:?\d{2}))(?=\s|$)"
 )
+
+#: RFC 3339 sec. 5.6 permits a lowercase trailing ``z`` (and lowercase
+#: ``t`` date/time separator, already handled above) as equivalent to
+#: uppercase -- both normalize to the same UTC offset representation.
+_MAX_PID = 2_147_483_647
 _BSD_TS_RE = re.compile(r"^([A-Za-z]{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2})(?=\s|$)")
 _HEADER_TAIL_RE = re.compile(r"^(?P<source>[^\s\[:]+)(?:\[(?P<pid>\d+)\])?:\s?(?P<message>.*)$")
 
@@ -63,7 +68,7 @@ def _normalize_timestamp(raw: str) -> tuple[str | None, LogParseIssueCode | None
     parsed at all. Never infers a missing year, date, or timezone, and
     never uses the current clock to repair an invalid value.
     """
-    candidate = raw[:-1] + "+00:00" if raw.endswith("Z") else raw
+    candidate = raw[:-1] + "+00:00" if raw.endswith(("Z", "z")) else raw
     try:
         parsed = datetime.fromisoformat(candidate)
     except ValueError:
@@ -179,7 +184,7 @@ def parse_jsonl_line(
     pid: int | None
     if pid_raw is None:
         pid = None
-    elif type(pid_raw) is int and pid_raw >= 0:
+    elif type(pid_raw) is int and 0 <= pid_raw <= _MAX_PID:
         pid = pid_raw
     else:
         pid = None
@@ -188,7 +193,7 @@ def parse_jsonl_line(
                 line_number,
                 LogParseIssueCode.INVALID_FIELD_TYPE,
                 CheckStatus.WARN,
-                "pid field is not a non-negative integer",
+                f"pid field is not an integer in range 0-{_MAX_PID}",
             )
 
     timestamp_raw_value = _first_present(obj, _TIMESTAMP_KEYS)
@@ -318,6 +323,15 @@ def parse_syslog_line(
                 CheckStatus.WARN,
                 "pid field is not representable as an integer",
             )
+        else:
+            if pid > _MAX_PID:
+                pid = None
+                pid_issue = LogParseIssue(
+                    line_number,
+                    LogParseIssueCode.INVALID_FIELD_TYPE,
+                    CheckStatus.WARN,
+                    f"pid field is out of range 0-{_MAX_PID}",
+                )
     message_raw = header_match.group("message")
 
     message = message_raw

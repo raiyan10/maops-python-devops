@@ -39,14 +39,29 @@ def test_smoke_install_exercises_logs_parse_and_analyze() -> None:
     assert "scripts/smoke/make-log-fixture.py" in recipe
     assert "logs parse" in recipe
     assert "logs analyze" in recipe
-    # Both logs invocations validate their JSON output via json.tool,
-    # exactly like the existing inventory/tools/doctor smoke steps.
     logs_lines = [
         line for line in recipe.splitlines() if "logs parse" in line or "logs analyze" in line
     ]
-    assert len(logs_lines) == 2
-    for line in logs_lines:
-        assert "json.tool" in line
+    # One JSON-syntax-validating line and one secret-absence-asserting
+    # line per subcommand (Day 4 finding C: JSON validity alone is
+    # insufficient to prove redaction actually happened).
+    assert len(logs_lines) == 4
+    json_tool_lines = [line for line in logs_lines if "json.tool" in line]
+    assert len(json_tool_lines) == 2
+
+
+def test_smoke_install_asserts_synthetic_secret_absent_from_logs_output() -> None:
+    recipe = _target_recipe(MAKEFILE_PATH.read_text(encoding="utf-8"), "smoke-install")
+    assert "smoke-test-secret-do-not-use-1234567890" in recipe
+    secret_assertion_lines = [
+        line for line in recipe.splitlines() if "smoke-test-secret-do-not-use-1234567890" in line
+    ]
+    parse_assertions = [line for line in secret_assertion_lines if "logs parse" in line]
+    analyze_assertions = [line for line in secret_assertion_lines if "logs analyze" in line]
+    assert len(parse_assertions) == 1
+    assert len(analyze_assertions) == 1
+    for line in secret_assertion_lines:
+        assert "assert" in line
 
 
 def test_build_removes_stale_artifacts_before_building() -> None:

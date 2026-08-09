@@ -20,8 +20,10 @@ Day 1 / v0.1.0 delivered the packaging, CLI, and diagnostics foundation.
 Day 2 / v0.2.0 added typed configuration management and a reusable, safe
 subprocess execution layer, demonstrated through an allowlisted,
 read-only tool-inspection command. Day 3 / v0.3.0 added typed, structured,
-read-only system and filesystem inventory. Day 4 / v0.4.0 adds bounded,
-typed log parsing and deterministic operational event analysis:
+read-only system and filesystem inventory. Day 4 / v0.4.0 added bounded,
+typed log parsing and deterministic operational event analysis. Day 5 /
+v0.5.0 adds bounded HTTP and TCP availability checks — the package's
+first feature permitted to make network connections:
 
 - A `src`-layout, stdlib-only Python package (`maops_pydevops`) —
   `tomllib` (standard library since Python 3.11) is the only addition,
@@ -58,6 +60,20 @@ typed log parsing and deterministic operational event analysis:
   [docs/log-analysis.md](docs/log-analysis.md), and
   [docs/log-redaction.md](docs/log-redaction.md) for the complete
   contracts.
+- `health http` / `health tcp` — bounded, deterministic HTTP and TCP
+  availability checks against explicitly supplied endpoints only (no
+  CIDR expansion, port ranges, or discovery). A fixed retry policy
+  (`attempts = retries + 1`, no jitter) and bounded
+  `ThreadPoolExecutor` concurrency, with deterministic report ordering
+  that always matches CLI target order. HTTPS always validates
+  certificates and hostnames — there is no `--insecure` option, no
+  request bodies, no response-body/header retention, and redirects are
+  never followed. This is an availability checker, not a vulnerability
+  scanner. Network access is isolated to two dedicated modules; every
+  other command's existing network prohibition is unchanged. See
+  [docs/health-checks.md](docs/health-checks.md) and
+  [docs/http-health-safety.md](docs/http-health-safety.md) for the
+  complete contracts.
 - A full local quality gate (formatting, linting, strict typing, tests,
   coverage, build, isolated smoke-install) and a matching CI workflow.
 
@@ -125,6 +141,13 @@ maops-py logs analyze app.log --format json
 maops-py logs analyze app.log --top 5 --bucket-seconds 60
 maops-py logs analyze app.log --repeat-threshold 3 --error-threshold 1
 
+maops-py health http https://example.com/health
+maops-py health http https://example.com/health --format json
+maops-py health http https://example.com/health --method HEAD --expect-status 200-299
+maops-py health http https://a.example/ https://b.example/ --retries 2 --workers 8
+maops-py health tcp 127.0.0.1:3306
+maops-py health tcp example.com:443 [::1]:8080 --timeout 5 --format json
+
 # Equivalent module invocation
 python -m maops_pydevops --version
 python -m maops_pydevops doctor --format json
@@ -132,6 +155,8 @@ python -m maops_pydevops config show --format json
 python -m maops_pydevops inventory system --format json
 python -m maops_pydevops logs parse app.log --format json
 python -m maops_pydevops logs analyze app.log --format json
+python -m maops_pydevops health http https://example.com/health --format json
+python -m maops_pydevops health tcp 127.0.0.1:3306 --format json
 ```
 
 Exit codes: `0` success, `1` operational or required-check failure, `2`
@@ -152,7 +177,7 @@ breakdown.
 ```
 $ maops-py doctor
 MAOps Python DevOps Toolkit - Doctor Report
-Version:              0.4.0
+Version:              0.5.0
 Python version:       3.12.3
 Python executable:    /home/user/.venv/bin/python
 Operating system:     Linux 6.8.0
@@ -185,7 +210,7 @@ $ maops-py doctor --format json | python -m json.tool
 
 ```json
 {
-  "version": "0.4.0",
+  "version": "0.5.0",
   "python": {
     "version": "3.12.3",
     "executable": "/home/user/.venv/bin/python",
@@ -264,7 +289,7 @@ model and every supported key.
 ```bash
 $ maops-py tools inspect git kubectl
 MAOps Python DevOps Toolkit - Tool Inspection
-Version:     0.4.0
+Version:     0.5.0
 Config path: /home/user/.config/maops-py/config.toml
 
 Tools:
@@ -280,7 +305,7 @@ $ maops-py tools inspect git --format json | python -m json.tool
 
 ```json
 {
-    "version": "0.4.0",
+    "version": "0.5.0",
     "configuration": {
         "path": "/home/user/.config/maops-py/config.toml",
         "command_timeout_seconds": 10.0,
@@ -316,7 +341,7 @@ safety boundary.
 ```bash
 $ maops-py inventory system
 MAOps Python DevOps Toolkit - System Inventory
-Version:               0.4.0
+Version:               0.5.0
 Hostname:              myhost
 OS:                    Linux 6.8.0
 OS version:            #1 SMP ...
@@ -340,7 +365,7 @@ $ maops-py inventory system --format json | python -m json.tool
 
 ```json
 {
-    "version": "0.4.0",
+    "version": "0.5.0",
     "host": {
         "hostname": "myhost",
         "os_family": "Linux",
@@ -393,7 +418,7 @@ reference.
 ```bash
 $ maops-py inventory filesystem . --max-depth 1 --top 5
 MAOps Python DevOps Toolkit - Filesystem Inventory
-Version:            0.4.0
+Version:            0.5.0
 Root:               /home/user/project
 Max depth:          1
 Max entries:        10000
@@ -425,7 +450,7 @@ $ maops-py inventory filesystem . --max-depth 1 --top 5 --format json | python -
 
 ```json
 {
-    "version": "0.4.0",
+    "version": "0.5.0",
     "root": "/home/user/project",
     "options": {
         "max_depth": 1,
@@ -467,7 +492,7 @@ recoverable per-entry issues during traversal never do.
 ```
 $ maops-py logs parse app.log
 MAOps Python DevOps Toolkit - Log Parse Report
-Version:            0.4.0
+Version:            0.5.0
 Path:               /home/user/app.log
 Input format:       auto
 Max lines:          10000
@@ -488,10 +513,10 @@ Byte limit reached: False
 Truncated:          False
 
 Events:
-  [ERROR    ] line      1 2026-08-06T04:00:00+00:00 smoke-api       database connection failed to 10.0.0.5
-  [ERROR    ] line      2 2026-08-06T04:00:05+00:00 smoke-api       database connection failed to 10.0.0.6
-  [WARNING  ] line      3 2026-08-06T04:00:10+00:00 smoke-api       password=[REDACTED] login attempt rejected
-  [ERROR    ] line      4 2026-08-06T04:00:15+00:00 smoke-svc       database connection failed to 10.0.0.7
+  [ERROR    ] line      1 2026-08-06T04:00:00+00:00 app01           smoke-api       database connection failed to 10.0.0.5
+  [ERROR    ] line      2 2026-08-06T04:00:05+00:00 app01           smoke-api       database connection failed to 10.0.0.6
+  [WARNING  ] line      3 2026-08-06T04:00:10+00:00 app01           smoke-api       password=[REDACTED] login attempt rejected
+  [ERROR    ] line      4 2026-08-06T04:00:15+00:00 app01           smoke-svc       database connection failed to 10.0.0.7
 
 Issues:
   [WARN] malformed_line       line 5: no recognizable timestamp
@@ -505,7 +530,7 @@ $ maops-py logs parse app.log --format json | python -m json.tool
 
 ```json
 {
-    "version": "0.4.0",
+    "version": "0.5.0",
     "path": "/home/user/app.log",
     "options": {
         "input_format": "auto",
@@ -568,7 +593,7 @@ parseable events, causes a non-zero exit.
 ```
 $ maops-py logs analyze app.log
 MAOps Python DevOps Toolkit - Log Analysis Report
-Version:            0.4.0
+Version:            0.5.0
 Path:               /home/user/app.log
 ...
 Top sources:
@@ -592,7 +617,7 @@ $ maops-py logs analyze app.log --format json | python -m json.tool
 
 ```json
 {
-    "version": "0.4.0",
+    "version": "0.5.0",
     "severity_counts": {
         "trace": 0, "debug": 0, "info": 0, "notice": 0, "warning": 1,
         "error": 3, "critical": 0, "alert": 0, "emergency": 0, "unknown": 0
@@ -625,6 +650,140 @@ aggregation, and threshold comparisons only — no machine learning,
 artificial intelligence, behavioral detection, or general
 anomaly-detection claim.
 
+### Health: HTTP
+
+```
+$ maops-py health http http://127.0.0.1:8000/health
+MAOps Python DevOps Toolkit - HTTP Health Check
+Version:            0.5.0
+Protocol:           http
+Method:             GET
+Expected status:    200-399
+Timeout (s):        3.0
+Retries:            1
+Retry delay (s):    0.25
+Workers:            4
+Follow redirects:   False
+TLS verify:         True
+
+Targets:
+  [PASS] #1 http://127.0.0.1:8000/health attempts=1 final_status=200 peer_ip=127.0.0.1 duration_ms=16 detail=(none)
+
+Summary:
+  targets=1 passed=1 warned=0 failed=0 attempts=1
+
+Overall status: PASS
+```
+
+```bash
+$ maops-py health http http://127.0.0.1:8000/health --format json | python -m json.tool
+```
+
+```json
+{
+    "version": "0.5.0",
+    "protocol": "http",
+    "options": {
+        "method": "GET",
+        "expected_status_min": 200,
+        "expected_status_max": 399,
+        "timeout_seconds": 3.0,
+        "retries": 1,
+        "retry_delay_seconds": 0.25,
+        "workers": 4,
+        "follow_redirects": false,
+        "tls_verify": true
+    },
+    "summary": {"targets": 1, "passed": 1, "warned": 0, "failed": 0, "attempts": 1},
+    "results": [
+        {
+            "index": 1,
+            "target": "http://127.0.0.1:8000/health",
+            "status": "pass",
+            "attempts_used": 1,
+            "total_duration_ms": 16,
+            "final_http_status": 200,
+            "peer_ip": "127.0.0.1",
+            "attempts": [
+                {
+                    "attempt": 1,
+                    "duration_ms": 16,
+                    "http_status": 200,
+                    "peer_ip": "127.0.0.1",
+                    "failure_reason": null,
+                    "detail": null
+                }
+            ]
+        }
+    ],
+    "overall": "pass"
+}
+```
+
+A target that fails on its first attempt and recovers on a retry is
+`"status": "warn"` (still exit `0` — degraded but available); a target
+that never recovers is `"status": "fail"` (exit `1`). Query parameter
+*values* are redacted in `target` (keys and order are preserved); the
+actual request still uses the real query string. See
+[docs/health-checks.md](docs/health-checks.md) and
+[docs/http-health-safety.md](docs/http-health-safety.md) for the complete
+contracts.
+
+### Health: TCP
+
+```
+$ maops-py health tcp 127.0.0.1:3306
+MAOps Python DevOps Toolkit - TCP Health Check
+Version:            0.5.0
+Protocol:           tcp
+Timeout (s):        3.0
+Retries:            1
+Retry delay (s):    0.25
+Workers:            4
+
+Targets:
+  [PASS] #1 127.0.0.1:3306    host=127.0.0.1 port=3306 attempts=1 peer_ip=127.0.0.1 duration_ms=2 detail=(none)
+
+Summary:
+  targets=1 passed=1 warned=0 failed=0 attempts=1
+
+Overall status: PASS
+```
+
+```bash
+$ maops-py health tcp 127.0.0.1:3306 --format json | python -m json.tool
+```
+
+```json
+{
+    "version": "0.5.0",
+    "protocol": "tcp",
+    "options": {"timeout_seconds": 3.0, "retries": 1, "retry_delay_seconds": 0.25, "workers": 4},
+    "summary": {"targets": 1, "passed": 1, "warned": 0, "failed": 0, "attempts": 1},
+    "results": [
+        {
+            "index": 1,
+            "target": "127.0.0.1:3306",
+            "host": "127.0.0.1",
+            "port": 3306,
+            "status": "pass",
+            "attempts_used": 1,
+            "total_duration_ms": 2,
+            "peer_ip": "127.0.0.1",
+            "attempts": [
+                {"attempt": 1, "duration_ms": 2, "peer_ip": "127.0.0.1", "failure_reason": null, "detail": null}
+            ]
+        }
+    ],
+    "overall": "pass"
+}
+```
+
+Connect-only: no application data is ever sent, no banner is ever read,
+and no TLS handshake is performed for a generic TCP target. Report
+ordering always matches the order targets were given on the command
+line, regardless of which target's checks complete first.
+
 ## Quality commands
 
 ```bash
@@ -651,21 +810,26 @@ src/maops_pydevops/
         tools.py                # allowlisted tool inspection
         inventory.py              # inventory CLI orchestration
         logs.py                     # logs parse/analyze orchestration
+        health.py                     # health http/tcp orchestration
     core/
         models.py             # enums + frozen dataclasses (doctor, tools)
         config_models.py         # config-domain enums + frozen dataclasses
         inventory_models.py        # inventory-domain enums + frozen dataclasses
         log_models.py                 # log-domain enums + frozen dataclasses
-        output.py                    # text/JSON rendering
-        platform.py                    # injectable platform/python inspection
-        config.py                        # config path/parse/validate/init
-        runner.py                          # safe subprocess execution layer
-        system_inventory.py                  # injectable host/OS/CPU/memory/uptime collection
-        filesystem_inventory.py                # bounded, deterministic filesystem scanner
-        log_reader.py                            # fd-safe bounded binary log reader
-        log_parsers.py                             # jsonl/syslog/auto line parsers
-        log_redaction.py                             # bounded regex secret redaction
-        log_analysis.py                                # streaming aggregation, signatures, buckets
+        health_models.py                # health-domain enums + frozen dataclasses
+        output.py                         # text/JSON rendering
+        platform.py                         # injectable platform/python inspection
+        config.py                             # config path/parse/validate/init
+        runner.py                               # safe subprocess execution layer
+        system_inventory.py                       # injectable host/OS/CPU/memory/uptime collection
+        filesystem_inventory.py                     # bounded, deterministic filesystem scanner
+        log_reader.py                                 # fd-safe bounded binary log reader
+        log_parsers.py                                  # jsonl/syslog/auto line parsers
+        log_redaction.py                                  # bounded regex secret redaction
+        log_analysis.py                                     # streaming aggregation, signatures, buckets
+        health_http.py                                        # bounded HTTP checks (network-capable)
+        health_tcp.py                                           # bounded TCP checks (network-capable)
+        health_runner.py                                         # bounded, ordered concurrency helper
 tests/
     unit/
     integration/
@@ -679,6 +843,8 @@ docs/
     log-parsing.md
     log-analysis.md
     log-redaction.md
+    health-checks.md
+    http-health-safety.md
     roadmap.md
     troubleshooting.md
     engineering-reviews/
@@ -692,7 +858,7 @@ docs/
 
 ## Roadmap
 
-See [docs/roadmap.md](docs/roadmap.md) for what's implemented in v0.4.0
+See [docs/roadmap.md](docs/roadmap.md) for what's implemented in v0.5.0
 and what's under consideration for future releases.
 
 ## License

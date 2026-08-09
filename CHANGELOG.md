@@ -5,6 +5,108 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-08-08
+
+Adds bounded HTTP and TCP availability ("health") checks — the toolkit's
+first feature permitted to make network connections. Network access is
+isolated to two new modules (`core/health_http.py`, `core/health_tcp.py`)
+plus a bounded-concurrency helper (`core/health_runner.py`); every existing
+module (`doctor`, `config`, `tools`, `runner` outside its established
+subprocess use, `inventory`, `logs`) retains its existing network
+prohibition, verified by a dedicated regression test. `health http` and
+`health tcp` check only explicitly supplied endpoints — no CIDR expansion,
+subnet/host discovery, port ranges, URL globbing, arbitrary port lists, raw
+packets, ICMP, SYN scanning, or banner grabbing. This is an availability
+checker, not a vulnerability scanner. The toolkit remains
+standard-library-only at runtime. Also resolves the ten Day 4
+carry-forward findings deferred to this release.
+
+### Added
+
+- `maops-py health http URL [URL ...] [--method GET|HEAD]
+  [--expect-status STATUS|STATUS-STATUS] [--timeout SECONDS] [--retries N]
+  [--retry-delay SECONDS] [--workers N] [--format text|json]` — bounded HTTP
+  availability checks via `http.client` (never `urllib.request`, avoiding
+  implicit proxy/redirect behavior). HTTPS always validates certificates
+  and hostnames via `ssl.create_default_context()` with no relaxation and
+  no `--insecure` option; redirects are never followed; only GET/HEAD are
+  supported with no request body; response bodies and headers are never
+  read or serialized. URL userinfo is rejected as a usage error; query
+  parameter values are redacted in reports while key order is preserved
+  (see `docs/http-health-safety.md`).
+- `maops-py health tcp TARGET [TARGET ...] [--timeout SECONDS]
+  [--retries N] [--retry-delay SECONDS] [--workers N] [--format
+  text|json]` — bounded, connect-only TCP checks (`hostname:port`,
+  `IPv4:port`, `[IPv6]:port`). No application data is sent, no banner is
+  read, and no TLS handshake is performed.
+- Deterministic per-target retry policy: `attempts = retries + 1`, a fixed
+  (non-jittered) retry delay, and explicit PASS (succeeds on first
+  attempt) / WARN (fails then recovers on retry) / FAIL (never recovers)
+  classification, rolling up to a report-level `overall` and CLI exit code
+  (`0` for pass/warn, `1` for fail, `2` for usage/target-validation
+  errors). A service that recovers during retries is treated as degraded
+  but available.
+- Bounded concurrency via `concurrent.futures.ThreadPoolExecutor` (1-32
+  workers, 1-100 targets per invocation): one worker per target, retries
+  run sequentially inside that worker, and report ordering always matches
+  original CLI target order regardless of completion order.
+- New typed models in `core/health_models.py` (`HealthProtocol`,
+  `HttpMethod`, `HttpFailureReason`, `TcpFailureReason`, and their
+  supporting frozen dataclasses/reports), with a closed, deterministic
+  failure taxonomy (`dns_error`, `timeout`, `connection_refused`,
+  `connection_error`, `tls_error`, `http_protocol_error`,
+  `unexpected_status`, `invalid_target_encoding`) — arbitrary exception
+  text is never copied into a report; unexpected programming exceptions
+  are never silently converted into a network failure. A malformed-label
+  hostname (e.g. a stray double dot) or a non-ASCII URL path/query
+  character now degrades to `invalid_target_encoding` instead of crashing
+  the whole multi-target run with an uncaught `UnicodeError`/
+  `UnicodeEncodeError` (found and fixed during pre-release review; see
+  `docs/engineering-reviews/day-05-release-readiness-followup.md`).
+- `docs/health-checks.md` and `docs/http-health-safety.md` documenting
+  HTTP/TCP target syntax, retry/concurrency semantics, exit codes, the
+  retryable-status set, peer-IP behavior, loopback/private-endpoint
+  support, and the safety model in full.
+
+### Fixed
+
+Resolves the following findings deferred from the Day 4 engineering
+reviews:
+
+- Quoted `key="value with spaces"`-style secrets are now fully redacted
+  end-to-end instead of stopping at the first embedded whitespace
+  character (Day 4 finding).
+- A log line truncated mid-line by `--max-bytes` is now marked as a
+  distinct, structured truncation fragment and skipped, rather than being
+  silently decoded as if it were a complete short line (Day 4 finding).
+- `make smoke-install` now asserts the log fixture's synthetic secret is
+  absent from `logs parse`/`logs analyze` JSON output, rather than only
+  validating JSON syntax (Day 4 finding).
+- RFC 3339 timestamps with a lowercase trailing `z` (in addition to the
+  already-supported lowercase `t` date/time separator) now parse and
+  normalize correctly instead of being rejected (Day 4 finding).
+- Purely decimal 8+-digit tokens (e.g. an order ID) in log message
+  signatures now normalize to `<num>` instead of being misclassified as
+  `<hex>` (Day 4 finding).
+- JSONL and syslog `pid` values are now bounded to `0-2147483647`; an
+  out-of-range value degrades to a structured invalid-field issue instead
+  of being serialized verbatim (Day 4 finding).
+- `logs parse`'s text output now renders the already-modeled `hostname`
+  field per event (Day 4 finding).
+- `docs/inventory.md`'s example output no longer shows a stale `0.3.0`
+  version value (Day 4 finding).
+- Test-quality cleanup: replaced infrastructure-load-dependent wall-clock
+  assertions in the redaction bounded-behavior tests with deterministic
+  correctness assertions; added a live `AF_UNIX` special-file rejection
+  test for the log reader (previously only mocked); centralized the
+  duplicated `_isolated_config_env` test fixture into a shared
+  `tests/conftest.py` (Day 4 finding).
+
+### Changed
+
+- `docs/subprocess-safety.md`'s "Exit-code and warning semantics across
+  commands" table gains rows for `health http`/`health tcp`.
+
 ## [0.4.0] - 2026-08-06
 
 Adds bounded, typed, structured log parsing and deterministic operational

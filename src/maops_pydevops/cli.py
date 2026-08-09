@@ -9,6 +9,7 @@ duplicated command logic between the two entry points.
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
@@ -20,6 +21,7 @@ from maops_pydevops.commands.config import (
     validate_config,
 )
 from maops_pydevops.commands.doctor import build_report
+from maops_pydevops.commands.health import build_health_http_report, build_health_tcp_report
 from maops_pydevops.commands.inventory import build_filesystem_report, build_system_report
 from maops_pydevops.commands.logs import build_log_analysis_report, build_log_parse_report
 from maops_pydevops.commands.tools import TOOL_ALLOWLIST, build_inspect_report
@@ -31,11 +33,16 @@ from maops_pydevops.core.config_models import (
     ConfigInitStatus,
     is_valid_command_timeout_seconds,
 )
+from maops_pydevops.core.health_models import HttpMethod
 from maops_pydevops.core.log_models import LogInputFormat
 from maops_pydevops.core.models import CheckStatus, OutputFormat
 from maops_pydevops.core.output import (
     render_config_show_json,
     render_config_show_text,
+    render_health_http_json,
+    render_health_http_text,
+    render_health_tcp_json,
+    render_health_tcp_text,
     render_inventory_filesystem_json,
     render_inventory_filesystem_text,
     render_inventory_system_json,
@@ -127,6 +134,57 @@ def _parse_repeat_threshold(raw: str) -> int:
 
 def _parse_error_threshold(raw: str) -> int:
     return _parse_bounded_int(raw, minimum=1, maximum=1_000_000, label="--error-threshold")
+
+
+def _parse_bounded_float(
+    raw: str, *, minimum: float, maximum: float, min_exclusive: bool, label: str
+) -> float:
+    """argparse ``type=`` callback: parse and range-check a bounded float value."""
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"{label} must be a number") from exc
+    lower_ok = value > minimum if min_exclusive else value >= minimum
+    if not (lower_ok and value <= maximum):
+        bound_desc = f"greater than {minimum}" if min_exclusive else f"at least {minimum}"
+        raise argparse.ArgumentTypeError(f"{label} must be {bound_desc} and at most {maximum}")
+    return value
+
+
+def _parse_health_timeout_seconds(raw: str) -> float:
+    return _parse_bounded_float(
+        raw, minimum=0.0, maximum=60.0, min_exclusive=True, label="--timeout"
+    )
+
+
+def _parse_retry_delay_seconds(raw: str) -> float:
+    return _parse_bounded_float(
+        raw, minimum=0.0, maximum=30.0, min_exclusive=False, label="--retry-delay"
+    )
+
+
+def _parse_retries(raw: str) -> int:
+    return _parse_bounded_int(raw, minimum=0, maximum=5, label="--retries")
+
+
+def _parse_workers(raw: str) -> int:
+    return _parse_bounded_int(raw, minimum=1, maximum=32, label="--workers")
+
+
+_EXPECTED_STATUS_RE = re.compile(r"^(?P<low>\d{3})(?:-(?P<high>\d{3}))?$")
+
+
+def _parse_expected_status(raw: str) -> tuple[int, int]:
+    """argparse ``type=`` callback: parse ``--expect-status`` (``NNN`` or ``NNN-NNN``)."""
+    match = _EXPECTED_STATUS_RE.match(raw)
+    if match is None:
+        raise argparse.ArgumentTypeError("--expect-status must be NNN or NNN-NNN (100-599)")
+    low = int(match.group("low"))
+    high_group = match.group("high")
+    high = int(high_group) if high_group is not None else low
+    if not (100 <= low <= high <= 599):
+        raise argparse.ArgumentTypeError("--expect-status must satisfy 100 <= low <= high <= 599")
+    return low, high
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -377,6 +435,95 @@ def build_parser() -> argparse.ArgumentParser:
         type=_parse_error_threshold,
         default=1,
         help="Error-volume count that triggers a finding, 1-1000000 (default: 1).",
+    )
+
+    health_parser = subparsers.add_parser(
+        "health", help="Bounded HTTP and TCP availability checks."
+    )
+    health_subparsers = health_parser.add_subparsers(dest="health_command", required=True)
+
+    health_http_parser = health_subparsers.add_parser(
+        "http", help="Check HTTP/HTTPS endpoint availability."
+    )
+    health_http_parser.add_argument("urls", nargs="+", help="HTTP/HTTPS URLs to check (max 100).")
+    health_http_parser.add_argument(
+        "--method",
+        choices=["GET", "HEAD"],
+        default="GET",
+        help="HTTP method (default: GET).",
+    )
+    health_http_parser.add_argument(
+        "--expect-status",
+        type=_parse_expected_status,
+        default=(200, 399),
+        help="Expected status, NNN or NNN-NNN, 100-599 (default: 200-399).",
+    )
+    health_http_parser.add_argument(
+        "--timeout",
+        type=_parse_health_timeout_seconds,
+        default=3.0,
+        help="Per-attempt timeout in seconds, >0 and <=60.0 (default: 3.0).",
+    )
+    health_http_parser.add_argument(
+        "--retries",
+        type=_parse_retries,
+        default=1,
+        help="Maximum retries after the first attempt, 0-5 (default: 1).",
+    )
+    health_http_parser.add_argument(
+        "--retry-delay",
+        type=_parse_retry_delay_seconds,
+        default=0.25,
+        help="Fixed delay between retries in seconds, 0-30.0 (default: 0.25).",
+    )
+    health_http_parser.add_argument(
+        "--workers",
+        type=_parse_workers,
+        default=4,
+        help="Maximum concurrent workers, 1-32 (default: 4).",
+    )
+    health_http_parser.add_argument(
+        "--format",
+        choices=[fmt.value for fmt in OutputFormat],
+        default=None,
+        help="Output format (default: effective output_format).",
+    )
+
+    health_tcp_parser = health_subparsers.add_parser("tcp", help="Check TCP port connectivity.")
+    health_tcp_parser.add_argument(
+        "targets",
+        nargs="+",
+        help="TCP targets (host:port, IPv4:port, [IPv6]:port; max 100).",
+    )
+    health_tcp_parser.add_argument(
+        "--timeout",
+        type=_parse_health_timeout_seconds,
+        default=3.0,
+        help="Per-attempt timeout in seconds, >0 and <=60.0 (default: 3.0).",
+    )
+    health_tcp_parser.add_argument(
+        "--retries",
+        type=_parse_retries,
+        default=1,
+        help="Maximum retries after the first attempt, 0-5 (default: 1).",
+    )
+    health_tcp_parser.add_argument(
+        "--retry-delay",
+        type=_parse_retry_delay_seconds,
+        default=0.25,
+        help="Fixed delay between retries in seconds, 0-30.0 (default: 0.25).",
+    )
+    health_tcp_parser.add_argument(
+        "--workers",
+        type=_parse_workers,
+        default=4,
+        help="Maximum concurrent workers, 1-32 (default: 4).",
+    )
+    health_tcp_parser.add_argument(
+        "--format",
+        choices=[fmt.value for fmt in OutputFormat],
+        default=None,
+        help="Output format (default: effective output_format).",
     )
 
     return parser
@@ -638,6 +785,94 @@ def run_logs_analyze(
     return EXIT_SUCCESS if report.overall is not CheckStatus.FAIL else EXIT_FAILURE
 
 
+def run_health_http(
+    urls: Sequence[str],
+    method: str,
+    expect_status: tuple[int, int],
+    timeout: float,
+    retries: int,
+    retry_delay: float,
+    workers: int,
+    format_arg: str | None,
+) -> int:
+    """Run bounded HTTP availability checks against explicitly supplied URLs.
+
+    Exits 2 if the target count (1-100) or any target's syntax/privacy
+    rules are violated -- checked entirely before any connection is
+    attempted. Exits 1 if any target's overall status is FAIL. Exits 0 for
+    overall pass or warn: a target that recovers during retries is
+    degraded but still available.
+    """
+    resolution = resolve_effective_config(cli_output_format=format_arg)
+    if resolution.config is None:
+        print(f"Error: {resolution.error}", file=sys.stderr)
+        return EXIT_FAILURE
+
+    expected_min, expected_max = expect_status
+    report, error = build_health_http_report(
+        urls,
+        method=HttpMethod(method),
+        expected_status_min=expected_min,
+        expected_status_max=expected_max,
+        timeout_seconds=timeout,
+        retries=retries,
+        retry_delay_seconds=retry_delay,
+        workers=workers,
+    )
+    if report is None:
+        print(f"Error: {error}", file=sys.stderr)
+        return EXIT_USAGE_ERROR
+
+    if format_arg is not None:
+        output_format = OutputFormat(format_arg)
+    else:
+        output_format = resolution.config.output_format
+    if output_format is OutputFormat.JSON:
+        print(render_health_http_json(report))
+    else:
+        print(render_health_http_text(report), end="")
+    return EXIT_SUCCESS if report.overall is not CheckStatus.FAIL else EXIT_FAILURE
+
+
+def run_health_tcp(
+    targets: Sequence[str],
+    timeout: float,
+    retries: int,
+    retry_delay: float,
+    workers: int,
+    format_arg: str | None,
+) -> int:
+    """Run bounded TCP connect checks against explicitly supplied targets.
+
+    Exit-code contract mirrors :func:`run_health_http` exactly.
+    """
+    resolution = resolve_effective_config(cli_output_format=format_arg)
+    if resolution.config is None:
+        print(f"Error: {resolution.error}", file=sys.stderr)
+        return EXIT_FAILURE
+
+    report, error = build_health_tcp_report(
+        targets,
+        timeout_seconds=timeout,
+        retries=retries,
+        retry_delay_seconds=retry_delay,
+        workers=workers,
+    )
+    if report is None:
+        print(f"Error: {error}", file=sys.stderr)
+        return EXIT_USAGE_ERROR
+
+    if format_arg is not None:
+        output_format = OutputFormat(format_arg)
+    else:
+        output_format = resolution.config.output_format
+    if output_format is OutputFormat.JSON:
+        print(render_health_tcp_json(report))
+    else:
+        print(render_health_tcp_text(report), end="")
+    return EXIT_SUCCESS if report.overall is not CheckStatus.FAIL else EXIT_FAILURE
+
+
 def _dispatch_version(args: argparse.Namespace) -> int:
     del args
     return run_version()
@@ -707,6 +942,30 @@ def _dispatch_logs_analyze(args: argparse.Namespace) -> int:
     )
 
 
+def _dispatch_health_http(args: argparse.Namespace) -> int:
+    return run_health_http(
+        args.urls,
+        args.method,
+        args.expect_status,
+        args.timeout,
+        args.retries,
+        args.retry_delay,
+        args.workers,
+        args.format,
+    )
+
+
+def _dispatch_health_tcp(args: argparse.Namespace) -> int:
+    return run_health_tcp(
+        args.targets,
+        args.timeout,
+        args.retries,
+        args.retry_delay,
+        args.workers,
+        args.format,
+    )
+
+
 _COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
     "version": _dispatch_version,
     "doctor": _dispatch_doctor,
@@ -733,11 +992,17 @@ _LOGS_COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
     "analyze": _dispatch_logs_analyze,
 }
 
+_HEALTH_COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
+    "http": _dispatch_health_http,
+    "tcp": _dispatch_health_tcp,
+}
+
 _COMMAND_GROUPS: dict[str, dict[str, Callable[[argparse.Namespace], int]]] = {
     "config": _CONFIG_COMMANDS,
     "tools": _TOOLS_COMMANDS,
     "inventory": _INVENTORY_COMMANDS,
     "logs": _LOGS_COMMANDS,
+    "health": _HEALTH_COMMANDS,
 }
 
 

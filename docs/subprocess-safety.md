@@ -124,6 +124,7 @@ assume it applies to another and be surprised when it doesn't:
 | `inventory filesystem` | A per-entry race or permission issue was encountered during traversal | Never affects the exit code — only a root path that cannot be classified at all (nonexistent/inaccessible) exits `1` |
 | `logs parse` | A line was malformed, overlong, had an invalid timestamp, or input was truncated by a limit | Never affects the exit code — exits `0` for any report with at least one parsed event, `overall` `pass` or `warn`. Only the file itself being unreadable, or a non-empty file with zero parsed events, exits `1` |
 | `logs analyze` | Any advisory finding fired (repeated signature, error volume, unknown severity, out-of-order timestamps, malformed/overlong lines, truncation) | Never affects the exit code — identical exit semantics to `logs parse`; findings are advisory only |
+| `health http` / `health tcp` | A target initially fails but recovers on a retry (`overall: "warn"`) | Never affects the exit code — exits `0`, same as `overall: "pass"`; a target recovering during configured retries is degraded but available. Only `overall: "fail"` (a target never recovers across all attempts) exits `1` |
 
 In short: `doctor` and both `inventory` commands treat "some optional data
 was unavailable" as fully non-fatal, while `tools inspect` treats "a
@@ -136,7 +137,12 @@ input that yields **zero parseable events** is the one condition,
 besides the file itself being unreadable, that does exit `1` — see
 `docs/log-parsing.md` and `docs/log-analysis.md` for the complete
 semantics. See `docs/inventory.md` for the full field-level semantics
-behind `inventory`'s degraded-data warnings.
+behind `inventory`'s degraded-data warnings. `health http`/`health tcp`
+use a three-way `pass`/`warn`/`fail` status per target (see
+`docs/health-checks.md`) rather than the two-way pass/warn used
+elsewhere in this table — `warn` specifically means "recovered during
+retries," a condition that cannot occur for any other command in this
+package, since no other command retries.
 
 ## Limitations
 

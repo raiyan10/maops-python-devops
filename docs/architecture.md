@@ -17,21 +17,26 @@ src/maops_pydevops/
         tools.py              # allowlisted tool inspection, build_inspect_report()
         inventory.py            # inventory CLI orchestration: build_system_report(), build_filesystem_report()
         logs.py                   # logs CLI orchestration: build_log_parse_report(), build_log_analysis_report()
+        health.py                  # health CLI orchestration: build_health_http_report(), build_health_tcp_report()
     core/
         models.py           # enums + frozen dataclasses (doctor, tools-inspect)
         config_models.py      # config-domain enums + frozen dataclasses
         inventory_models.py     # inventory-domain enums + frozen dataclasses
         log_models.py             # log-domain enums + frozen dataclasses
-        output.py                   # text/JSON rendering, all report types
-        platform.py                   # injectable platform/python inspection
-        config.py                       # config path/parse/validate/precedence/init
-        runner.py                         # safe subprocess execution layer
-        system_inventory.py                 # injectable host/OS/CPU/memory/uptime collection
-        filesystem_inventory.py               # bounded, deterministic filesystem scanner
-        log_reader.py                           # fd-safe bounded binary log reader
-        log_parsers.py                            # jsonl/syslog/auto line parsers
-        log_redaction.py                            # bounded regex secret redaction
-        log_analysis.py                               # streaming aggregation, signatures, buckets
+        health_models.py            # health-domain enums + frozen dataclasses
+        output.py                     # text/JSON rendering, all report types
+        platform.py                     # injectable platform/python inspection
+        config.py                         # config path/parse/validate/precedence/init
+        runner.py                           # safe subprocess execution layer
+        system_inventory.py                   # injectable host/OS/CPU/memory/uptime collection
+        filesystem_inventory.py                 # bounded, deterministic filesystem scanner
+        log_reader.py                             # fd-safe bounded binary log reader
+        log_parsers.py                              # jsonl/syslog/auto line parsers
+        log_redaction.py                              # bounded regex secret redaction
+        log_analysis.py                                 # streaming aggregation, signatures, buckets
+        health_http.py                                    # bounded HTTP availability checks (network-capable)
+        health_tcp.py                                       # bounded TCP connect checks (network-capable)
+        health_runner.py                                      # bounded, ordered concurrent.futures helper
 ```
 
 ## 2. Entry points
@@ -227,6 +232,36 @@ small per-distinct-value aggregates (`LogAnalysisState`). See
 time-bucket contract, and `docs/log-redaction.md` for the redaction
 contract shared with `logs parse`.
 
+## 4g. Data flow: health check
+
+```
+commands/health.py:build_health_http_report()/build_health_tcp_report()
+    core/health_http.py:validate_http_target()/                # every target validated
+    core/health_tcp.py:validate_tcp_target()                   # before any socket opens
+    core/health_runner.py:run_bounded_parallel()                # ThreadPoolExecutor,
+        core/health_http.py:run_http_target_with_retries()      # one worker per target,
+        core/health_tcp.py:run_tcp_target_with_retries()        # retries sequential per-worker
+            core/health_http.py:_perform_http_attempt()          # http.client, ssl -- no urllib.request
+            core/health_tcp.py:_perform_tcp_attempt()             # socket, connect-only
+    -> core/health_models.py:HttpReport / TcpReport (frozen dataclass)
+
+cli.py:run_health_http()/run_health_tcp()
+    core/output.py:render_health_http_text()/_json() or render_health_tcp_text()/_json()
+    -> print once, exit 2 if report is None (target-validation failure),
+       1 if overall is FAIL, else 0
+```
+
+This is the first, and only, data flow in the package that opens a
+network connection. `core/health_http.py` and `core/health_tcp.py` are the
+sole modules permitted to import `socket`/`ssl`/`http.client`;
+`core/health_runner.py` is the sole module permitted to import
+`concurrent.futures`. Report ordering always matches original CLI target
+order, regardless of which target's checks complete first — see
+`core/health_runner.py:run_bounded_parallel()`'s pre-sized,
+index-addressed result list. See `docs/health-checks.md` for the full
+CLI/report contract and `docs/http-health-safety.md` for the complete
+network safety model.
+
 ## 5. Typed models
 
 `core/models.py` defines `CheckStatus` and `OutputFormat` as
@@ -253,7 +288,16 @@ same convention for the log domain: `LogSeverity`, `LogInputFormat`,
 `LogAnalysisTime`, `LogAnalysisFinding`, `LogAnalysisReport`, and their
 supporting option/summary dataclasses as `frozen=True`. It also reuses
 `CheckStatus` for report `overall` and finding/issue status, rather than
-introducing a fourth status enum. Serialization never uses
+introducing a fourth status enum. `core/health_models.py` follows the
+same convention for the health-check domain: `HealthProtocol`,
+`HttpFailureReason`, `TcpFailureReason` as `StrEnum` (lowercase, matching
+their JSON spelling); `HttpMethod` is the one deliberate exception —
+its values are uppercase (`GET`, `HEAD`) to match `--method`'s CLI
+spelling exactly, since the convention's real invariant is "matches CLI
+spelling," not "always lowercase." `HttpOptions`/`TcpOptions`,
+`HttpAttempt`/`TcpAttempt`, `HttpTargetResult`/`TcpTargetResult`,
+`HttpSummary`/`TcpSummary`, `HttpReport`/`TcpReport` are `frozen=True`,
+reusing `CheckStatus` for per-target/report status. Serialization never uses
 `dataclasses.asdict()` or dict spreading — every
 field is written out explicitly so the JSON schema is traceable directly
 from the code. No custom exception classes are introduced anywhere: every
@@ -315,7 +359,15 @@ between the check and the open), and reads bounded, sequential binary
 chunks — never `mmap`, never a whole-file read. `core/log_models.py`,
 `core/log_parsers.py`, `core/log_redaction.py`, and `core/log_analysis.py`
 never import `subprocess` or `socket`, and never read named environment
-variables. See `.claude/CLAUDE.md` for the full restriction list,
+variables. `core/health_http.py` and `core/health_tcp.py` are the first
+(and only) modules in this package permitted to import `socket`, `ssl`,
+or `http.client` — Day 5's health checks are the package's first
+intentional network access, deliberately isolated to these two modules
+plus `core/health_runner.py` (permitted to import `concurrent.futures`)
+and `commands/health.py` (orchestration only). Every other module's
+"no network" invariant is unchanged and is verified by a dedicated
+regression test (`tests/unit/test_no_network_health_boundary.py`). See
+`.claude/CLAUDE.md` for the full restriction list,
 `docs/subprocess-safety.md` / `docs/configuration.md` for those two
 modules' complete contracts, `docs/inventory.md` /
 `docs/filesystem-inventory-safety.md` for the inventory modules', and
@@ -348,9 +400,27 @@ build`/`make quality` against the same working tree.
 
 Log-reader tests never read a real system log file: every fixture is a
 `tmp_path`-scoped file, including adversarial cases (a symlink, a FIFO,
-a file replaced between check and open via `monkeypatch`, paths with
-spaces/Unicode/shell metacharacters). Parser and analysis tests never
-depend on the real host clock or locale. `tests/integration/
-test_logs_cli_integration.py` exercises `logs parse`/`logs analyze`
-through both entry points as real subprocesses, the same way
-`test_inventory_cli_integration.py` does for `inventory`.
+a live `AF_UNIX` socket special file, a file replaced between check and
+open via `monkeypatch`, paths with spaces/Unicode/shell metacharacters).
+Parser and analysis tests never depend on the real host clock or locale.
+`tests/integration/test_logs_cli_integration.py` exercises `logs
+parse`/`logs analyze` through both entry points as real subprocesses, the
+same way `test_inventory_cli_integration.py` does for `inventory`.
+
+Health-check unit tests never open a real socket: `core/health_http.py`'s
+and `core/health_tcp.py`'s single-attempt functions are exercised with
+injected fake `http.client`/`socket` objects that raise if a forbidden
+operation (reading a response body, sending TCP application data) is ever
+attempted, and the retry state machine and bounded-concurrency helper are
+tested with fully injected `sleep`/`clock`/worker-function collaborators —
+no real time or network dependency anywhere in `tests/unit/`.
+`tests/integration/test_health_http_loopback.py` and
+`test_health_tcp_loopback.py` exercise real network behavior, but only
+against real, locally bound `127.0.0.1` ephemeral-port servers/listeners
+(`tests/conftest.py`'s `http_loopback_server`/`tcp_loopback_listener`
+fixtures) — never a public host. `tests/unit/test_no_network_health_boundary.py`
+and `test_health_no_forbidden_tokens.py` together prove the network
+boundary described above: every non-health module still raises on a
+mocked `socket.socket`/`socket.create_connection` call, and the health
+modules import exactly the primitives (and none of the forbidden ones)
+they're supposed to.

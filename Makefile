@@ -78,7 +78,10 @@ smoke-install:
 	smoke_log="$$tmp_dir/log-fixture.log"; \
 	"$$tmp_dir/venv/bin/python" scripts/smoke/make-log-fixture.py "$$smoke_log"; \
 	"$$tmp_dir/venv/bin/maops-py" logs parse "$$smoke_log" --input-format auto --format json | "$$tmp_dir/venv/bin/python" -m json.tool >/dev/null; \
-	"$$tmp_dir/venv/bin/maops-py" logs analyze "$$smoke_log" --input-format auto --format json | "$$tmp_dir/venv/bin/python" -m json.tool >/dev/null
+	"$$tmp_dir/venv/bin/maops-py" logs analyze "$$smoke_log" --input-format auto --format json | "$$tmp_dir/venv/bin/python" -m json.tool >/dev/null; \
+	"$$tmp_dir/venv/bin/maops-py" logs parse "$$smoke_log" --input-format auto --format json | "$$tmp_dir/venv/bin/python" -c 'import json,sys; d=json.dumps(json.load(sys.stdin)); assert "smoke-test-secret-do-not-use-1234567890" not in d, "synthetic secret leaked in logs parse output"'; \
+	"$$tmp_dir/venv/bin/maops-py" logs analyze "$$smoke_log" --input-format auto --format json | "$$tmp_dir/venv/bin/python" -c 'import json,sys; d=json.dumps(json.load(sys.stdin)); assert "smoke-test-secret-do-not-use-1234567890" not in d, "synthetic secret leaked in logs analyze output"'; \
+	"$$tmp_dir/venv/bin/python" scripts/smoke/health_smoke_check.py "$$tmp_dir/venv/bin/maops-py"
 
 quality: format-check lint type-check coverage
 

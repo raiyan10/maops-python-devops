@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from maops_pydevops.core.config_models import ConfigShowReport
+from maops_pydevops.core.health_models import HttpReport, TcpReport
 from maops_pydevops.core.inventory_models import FilesystemInventoryReport, SystemInventoryReport
 from maops_pydevops.core.log_models import LogAnalysisReport, LogParseReport
 from maops_pydevops.core.models import DoctorReport, ToolsInspectReport
@@ -235,11 +236,12 @@ def render_logs_parse_text(report: LogParseReport) -> str:
     ]
     for event in report.events:
         timestamp = event.timestamp if event.timestamp is not None else "(none)"
+        hostname = _sanitize_for_text(event.hostname) if event.hostname is not None else "(none)"
         source = _sanitize_for_text(event.source) if event.source is not None else "(none)"
         message = _sanitize_for_text(event.message)
         lines.append(
             f"  [{event.severity.value.upper():<9}] line {event.line_number:>6} "
-            f"{timestamp:<25} {source:<15} {message}"
+            f"{timestamp:<25} {hostname:<15} {source:<15} {message}"
         )
 
     lines.append("")
@@ -330,4 +332,107 @@ def render_logs_analyze_text(report: LogAnalysisReport) -> str:
 
 def render_logs_analyze_json(report: LogAnalysisReport) -> str:
     """Render a LogAnalysisReport as a single, deterministic JSON document."""
+    return report.to_json()
+
+
+def render_health_http_text(report: HttpReport) -> str:
+    """Render an HttpReport as plain, deterministic text."""
+    options = report.options
+    summary = report.summary
+    lines: list[str] = [
+        "MAOps Python DevOps Toolkit - HTTP Health Check",
+        f"Version:            {report.version}",
+        f"Protocol:           {report.protocol.value}",
+        f"Method:             {options.method.value}",
+        f"Expected status:    {options.expected_status_min}-{options.expected_status_max}",
+        f"Timeout (s):        {options.timeout_seconds}",
+        f"Retries:            {options.retries}",
+        f"Retry delay (s):    {options.retry_delay_seconds}",
+        f"Workers:            {options.workers}",
+        f"Follow redirects:   {options.follow_redirects}",
+        f"TLS verify:         {options.tls_verify}",
+        "",
+        "Targets:",
+    ]
+    for result in report.results:
+        target = _sanitize_for_text(result.target)
+        final_attempt = result.attempts[-1] if result.attempts else None
+        detail = (
+            _sanitize_for_text(final_attempt.detail)
+            if final_attempt is not None and final_attempt.detail is not None
+            else "(none)"
+        )
+        peer_ip = result.peer_ip or "(none)"
+        final_status = (
+            str(result.final_http_status) if result.final_http_status is not None else "(none)"
+        )
+        detail_line = (
+            f"attempts={result.attempts_used} final_status={final_status} "
+            f"peer_ip={peer_ip} duration_ms={result.total_duration_ms} detail={detail}"
+        )
+        lines.append(
+            _format_check_line(result.status.value, f"#{result.index} {target}", detail_line)
+        )
+
+    lines.append("")
+    lines.append("Summary:")
+    lines.append(
+        f"  targets={summary.targets} passed={summary.passed} "
+        f"warned={summary.warned} failed={summary.failed} attempts={summary.attempts}"
+    )
+    lines.append("")
+    lines.append(f"Overall status: {report.overall.value.upper()}")
+    return "\n".join(lines) + "\n"
+
+
+def render_health_http_json(report: HttpReport) -> str:
+    """Render an HttpReport as a single, deterministic JSON document."""
+    return report.to_json()
+
+
+def render_health_tcp_text(report: TcpReport) -> str:
+    """Render a TcpReport as plain, deterministic text."""
+    options = report.options
+    summary = report.summary
+    lines: list[str] = [
+        "MAOps Python DevOps Toolkit - TCP Health Check",
+        f"Version:            {report.version}",
+        f"Protocol:           {report.protocol.value}",
+        f"Timeout (s):        {options.timeout_seconds}",
+        f"Retries:            {options.retries}",
+        f"Retry delay (s):    {options.retry_delay_seconds}",
+        f"Workers:            {options.workers}",
+        "",
+        "Targets:",
+    ]
+    for result in report.results:
+        target = _sanitize_for_text(result.target)
+        final_attempt = result.attempts[-1] if result.attempts else None
+        detail = (
+            _sanitize_for_text(final_attempt.detail)
+            if final_attempt is not None and final_attempt.detail is not None
+            else "(none)"
+        )
+        peer_ip = result.peer_ip or "(none)"
+        detail_line = (
+            f"host={result.host} port={result.port} attempts={result.attempts_used} "
+            f"peer_ip={peer_ip} duration_ms={result.total_duration_ms} detail={detail}"
+        )
+        lines.append(
+            _format_check_line(result.status.value, f"#{result.index} {target}", detail_line)
+        )
+
+    lines.append("")
+    lines.append("Summary:")
+    lines.append(
+        f"  targets={summary.targets} passed={summary.passed} "
+        f"warned={summary.warned} failed={summary.failed} attempts={summary.attempts}"
+    )
+    lines.append("")
+    lines.append(f"Overall status: {report.overall.value.upper()}")
+    return "\n".join(lines) + "\n"
+
+
+def render_health_tcp_json(report: TcpReport) -> str:
+    """Render a TcpReport as a single, deterministic JSON document."""
     return report.to_json()

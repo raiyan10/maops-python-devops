@@ -40,6 +40,7 @@ class LogParseIssueCode(StrEnum):
     INVALID_FIELD_TYPE = "invalid_field_type"
     INVALID_TIMESTAMP = "invalid_timestamp"
     OVERLONG_LINE = "overlong_line"
+    TRUNCATED_FRAGMENT = "truncated_fragment"
 
 
 class LogAnalysisFindingCode(StrEnum):

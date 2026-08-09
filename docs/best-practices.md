@@ -27,7 +27,7 @@ fields serialize via `.value` rather than the enum object.
 
 ## 4. Stdlib-only runtime
 
-v0.4.0 still has zero runtime dependencies — `argparse`, `contextlib`,
+v0.5.0 still has zero runtime dependencies — `argparse`, `contextlib`,
 `dataclasses`, `datetime`, `enum`, `errno`, `importlib.metadata`, `json`,
 `math`, `os`, `pathlib`, `platform`, `re`, `shutil`, `stat`, `subprocess`
 (confined to `core/runner.py` only), `sys`, `tempfile`, `time`, and
@@ -40,9 +40,12 @@ either: `core/log_reader.py` uses only `os`/`stat`/`errno`;
 `core/log_parsers.py` and `core/log_analysis.py` use only `re` and
 `datetime` (no third-party date-parsing or regex library); `datetime.UTC`
 (the alias used for timezone normalization) is available since Python
-3.11, matching this project's floor. Development tooling (`pytest`,
-`ruff`, `mypy`, `build`) lives in the `dev` optional-dependency group,
-never in runtime `dependencies`.
+3.11, matching this project's floor. `health http`/`health tcp` add no
+new runtime dependency either: `http.client`, `ssl`, `socket`,
+`ipaddress`, `urllib.parse`, and `concurrent.futures` are all standard
+library — no `requests`, `httpx`, or `aiohttp`. Development tooling
+(`pytest`, `ruff`, `mypy`, `build`) lives in the `dev` optional-dependency
+group, never in runtime `dependencies`.
 
 ## 5. Deterministic, isolated tests
 
@@ -107,5 +110,17 @@ glob, and never follow a symbolic link — `logs parse`/`logs analyze`
 open exactly the one literal path given, reject symlinks and special
 files outright, and never serialize a complete raw line into a report;
 see `docs/log-parsing.md`, `docs/log-analysis.md`, and
-`docs/log-redaction.md` for the complete contracts. See
+`docs/log-redaction.md` for the complete contracts. `core/health_http.py`
+and `core/health_tcp.py` are the only two modules permitted to import
+`socket`/`ssl`/`http.client` — this package's first intentional network
+access, isolated to these two modules plus `core/health_runner.py`
+(permitted to import `concurrent.futures`) and `commands/health.py`
+(orchestration only). HTTPS always validates certificates and hostnames
+(`ssl.create_default_context()` with zero attribute relaxation, no
+`--insecure` option); no request bodies, response-body retention,
+response-header collection, or redirect-following anywhere; URL userinfo
+is rejected outright; TCP checks are connect-only (no application data
+sent, no banner read). Every other module's existing network prohibition
+is unchanged and regression-tested — see `docs/http-health-safety.md` and
+`docs/health-checks.md` for the complete contracts. See
 `.claude/CLAUDE.md` for the authoritative list.

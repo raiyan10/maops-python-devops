@@ -93,6 +93,16 @@ def build_log_parse_report(
                     )
                 )
                 continue
+            if raw_line.truncated_fragment:
+                issues.append(
+                    LogParseIssue(
+                        raw_line.line_number,
+                        LogParseIssueCode.TRUNCATED_FRAGMENT,
+                        CheckStatus.WARN,
+                        "final line was truncated by max-bytes and was skipped",
+                    )
+                )
+                continue
             if raw_line.text.strip() == "":
                 blank_lines += 1
                 continue
@@ -196,6 +206,16 @@ def build_log_analysis_report(
                         LogParseIssueCode.OVERLONG_LINE,
                         CheckStatus.WARN,
                         "line exceeds max-line-bytes and was skipped",
+                    )
+                )
+                continue
+            if raw_line.truncated_fragment:
+                issues.append(
+                    LogParseIssue(
+                        raw_line.line_number,
+                        LogParseIssueCode.TRUNCATED_FRAGMENT,
+                        CheckStatus.WARN,
+                        "final line was truncated by max-bytes and was skipped",
                     )
                 )
                 continue
