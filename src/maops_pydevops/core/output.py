@@ -7,6 +7,8 @@ from maops_pydevops.core.health_models import HttpReport, TcpReport
 from maops_pydevops.core.inventory_models import FilesystemInventoryReport, SystemInventoryReport
 from maops_pydevops.core.log_models import LogAnalysisReport, LogParseReport
 from maops_pydevops.core.models import DoctorReport, ToolsInspectReport
+from maops_pydevops.core.report_models import AggregateReport, NormalizedReport
+from maops_pydevops.core.workflow_models import WorkflowRunReport, WorkflowValidationReport
 
 _LABEL_WIDTH = 20
 _STATUS_WIDTH = 4
@@ -50,17 +52,48 @@ _CONTROL_CHAR_TRANSLATION[0x0A] = "\\n"
 _CONTROL_CHAR_TRANSLATION[0x0D] = "\\r"
 _CONTROL_CHAR_TRANSLATION[0x7F] = "\\x7f"
 
+#: Zero-width and bidi-override/isolate formatting characters. These are
+#: valid, printable-width-zero Unicode codepoints (not C0/C1 controls), so
+#: the control-character table above never touches them -- but a crafted
+#: log line could still use them to visually reorder or hide report text
+#: (e.g. RIGHT-TO-LEFT OVERRIDE around a forged "Overall status" line).
+#: Escaped the same way control characters are: never emitted raw into a
+#: line-oriented text report.
+_FORMATTING_CHAR_TRANSLATION = {
+    codepoint: f"\\u{codepoint:04x}"
+    for codepoint in (
+        0x200B,  # ZERO WIDTH SPACE
+        0x200C,  # ZERO WIDTH NON-JOINER
+        0x200D,  # ZERO WIDTH JOINER
+        0x200E,  # LEFT-TO-RIGHT MARK
+        0x200F,  # RIGHT-TO-LEFT MARK
+        0x202A,  # LEFT-TO-RIGHT EMBEDDING
+        0x202B,  # RIGHT-TO-LEFT EMBEDDING
+        0x202C,  # POP DIRECTIONAL FORMATTING
+        0x202D,  # LEFT-TO-RIGHT OVERRIDE
+        0x202E,  # RIGHT-TO-LEFT OVERRIDE
+        0x2066,  # LEFT-TO-RIGHT ISOLATE
+        0x2067,  # RIGHT-TO-LEFT ISOLATE
+        0x2068,  # FIRST STRONG ISOLATE
+        0x2069,  # POP DIRECTIONAL ISOLATE
+        0xFEFF,  # ZERO WIDTH NO-BREAK SPACE / BOM
+    )
+}
+_CONTROL_CHAR_TRANSLATION.update(_FORMATTING_CHAR_TRANSLATION)
+
 
 def _sanitize_for_text(value: str) -> str:
-    """Escape control characters (including newlines) in log-derived text.
+    """Escape control and formatting characters in untrusted, external text.
 
-    A log event's ``message``/``source`` field comes from the file being
-    parsed, not from this toolkit -- interpolating it unescaped into a
-    line-oriented text report would let a crafted log line forge extra
-    report lines (including a fake ``Overall status`` footer). JSON
-    output is unaffected (``json.dumps`` already escapes control
-    characters correctly); this sanitization applies only to the text
-    renderer.
+    Untrusted text (a log event's ``message``/``source`` field, a health
+    target string, a report path) does not come from this toolkit --
+    interpolating it unescaped into a line-oriented text report would let
+    crafted input forge extra report lines (including a fake "Overall
+    status" footer) or visually reorder/hide report content via Unicode
+    bidi-override or zero-width characters. JSON output is unaffected
+    (``json.dumps`` already escapes control characters correctly, and
+    Unicode formatting characters are valid JSON string content); this
+    sanitization applies only to the text renderer.
     """
     return value.translate(_CONTROL_CHAR_TRANSLATION)
 
@@ -436,3 +469,197 @@ def render_health_tcp_text(report: TcpReport) -> str:
 def render_health_tcp_json(report: TcpReport) -> str:
     """Render a TcpReport as a single, deterministic JSON document."""
     return report.to_json()
+
+
+_MARKDOWN_SPECIAL_CHARS = str.maketrans(
+    {
+        "\\": "\\\\",
+        "`": "\\`",
+        "*": "\\*",
+        "_": "\\_",
+        "|": "\\|",
+        "[": "\\[",
+        "]": "\\]",
+        "<": "\\<",
+        ">": "\\>",
+    }
+)
+
+
+def _sanitize_for_markdown(value: str) -> str:
+    """Escape Markdown-significant characters in untrusted, external text.
+
+    Applied after :func:`_sanitize_for_text`'s control/formatting-character
+    escaping, so input is already free of raw control characters and
+    newlines by this point -- this step only prevents *Markdown* syntax
+    injection (forging a table cell boundary, emphasis run, or heading)
+    from externally sourced text such as a report path or hostname.
+    """
+    return _sanitize_for_text(value).translate(_MARKDOWN_SPECIAL_CHARS)
+
+
+def render_report_aggregate_text(report: AggregateReport) -> str:
+    """Render an AggregateReport as plain, deterministic text."""
+    options = report.options
+    summary = report.summary
+    lines: list[str] = [
+        "MAOps Python DevOps Toolkit - Aggregated Report",
+        f"Version:            {report.version}",
+        f"Max reports:        {options.max_reports}",
+        f"Max file bytes:     {options.max_file_bytes}",
+        "",
+        (
+            f"Reports:            {summary.reports} "
+            f"({summary.pass_count} pass, {summary.warn_count} warn, {summary.fail_count} fail)"
+        ),
+        "",
+        "Reports:",
+    ]
+    for normalized in report.reports:
+        lines.append(
+            _format_check_line(
+                normalized.status.value,
+                f"{normalized.kind.value} {_sanitize_for_text(normalized.source_path)}",
+                _sanitize_for_text(normalized.headline),
+            )
+        )
+        for metric in normalized.metrics:
+            lines.append(f"      {metric.label}: {_sanitize_for_text(metric.value)}")
+
+    lines.append("")
+    lines.append(f"Overall status: {report.overall.value.upper()}")
+    return "\n".join(lines) + "\n"
+
+
+def render_report_aggregate_json(report: AggregateReport) -> str:
+    """Render an AggregateReport as a single, deterministic JSON document."""
+    return report.to_json()
+
+
+def _render_normalized_report_markdown(normalized: NormalizedReport) -> list[str]:
+    lines = [
+        f"### {_sanitize_for_markdown(normalized.source_path)} "
+        f"({normalized.kind.value}) — {normalized.status.value.upper()}",
+        "",
+        _sanitize_for_markdown(normalized.headline),
+        "",
+    ]
+    if normalized.metrics:
+        lines.append("| Metric | Value |")
+        lines.append("|---|---|")
+        for metric in normalized.metrics:
+            lines.append(f"| {metric.label} | {_sanitize_for_markdown(metric.value)} |")
+        lines.append("")
+    return lines
+
+
+def render_report_aggregate_markdown(report: AggregateReport) -> str:
+    """Render an AggregateReport as deterministic GitHub-flavored Markdown."""
+    summary = report.summary
+    lines: list[str] = [
+        "# MAOps Aggregated Report",
+        "",
+        f"**Version:** {report.version}  ",
+        f"**Overall status:** {report.overall.value.upper()}  ",
+        (
+            f"**Summary:** {summary.reports} report(s) — {summary.pass_count} pass, "
+            f"{summary.warn_count} warn, {summary.fail_count} fail"
+        ),
+        "",
+    ]
+    for normalized in report.reports:
+        lines.extend(_render_normalized_report_markdown(normalized))
+    return "\n".join(lines).rstrip("\n") + "\n"
+
+
+def render_workflow_validate_text(report: WorkflowValidationReport) -> str:
+    """Render a WorkflowValidationReport as plain, deterministic text."""
+    lines: list[str] = [
+        "MAOps Python DevOps Toolkit - Workflow Validation",
+        f"Version:      {report.version}",
+        f"Path:         {_sanitize_for_text(report.path)}",
+        f"Status:       {report.status.value.upper()}",
+        (
+            f"Workflow:     "
+            f"{_sanitize_for_text(report.workflow_name) if report.workflow_name else '(none)'}"
+        ),
+        f"Step count:   {report.step_count}",
+        f"Error:        {_sanitize_for_text(report.error) if report.error else '(none)'}",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def render_workflow_validate_json(report: WorkflowValidationReport) -> str:
+    """Render a WorkflowValidationReport as a single, deterministic JSON document."""
+    return report.to_json()
+
+
+def render_workflow_run_text(report: WorkflowRunReport) -> str:
+    """Render a WorkflowRunReport as plain, deterministic text."""
+    summary = report.summary
+    lines: list[str] = [
+        "MAOps Python DevOps Toolkit - Workflow Run",
+        f"Version:            {report.version}",
+        f"Path:               {_sanitize_for_text(report.path)}",
+        f"Name:               {_sanitize_for_text(report.name)}",
+        f"Max steps:          {report.options.max_steps}",
+        "",
+        (
+            f"Steps:              {summary.steps} "
+            f"({summary.pass_count} pass, {summary.warn_count} warn, {summary.fail_count} fail)"
+        ),
+        "",
+        "Steps:",
+    ]
+    for step in report.steps:
+        lines.append(
+            _format_check_line(
+                step.status.value,
+                f"{step.kind.value} {_sanitize_for_text(step.id)}",
+                _sanitize_for_text(step.headline),
+            )
+        )
+        for metric in step.metrics:
+            lines.append(f"      {metric.label}: {_sanitize_for_text(metric.value)}")
+
+    lines.append("")
+    lines.append(f"Overall status: {report.overall.value.upper()}")
+    return "\n".join(lines) + "\n"
+
+
+def render_workflow_run_json(report: WorkflowRunReport) -> str:
+    """Render a WorkflowRunReport as a single, deterministic JSON document."""
+    return report.to_json()
+
+
+def render_workflow_run_markdown(report: WorkflowRunReport) -> str:
+    """Render a WorkflowRunReport as deterministic GitHub-flavored Markdown."""
+    summary = report.summary
+    lines: list[str] = [
+        f"# MAOps Workflow Run: {_sanitize_for_markdown(report.name)}",
+        "",
+        f"**Version:** {report.version}  ",
+        f"**Path:** {_sanitize_for_markdown(report.path)}  ",
+        f"**Overall status:** {report.overall.value.upper()}  ",
+        (
+            f"**Summary:** {summary.steps} step(s) — {summary.pass_count} pass, "
+            f"{summary.warn_count} warn, {summary.fail_count} fail"
+        ),
+        "",
+    ]
+    for step in report.steps:
+        step_heading = (
+            f"### {_sanitize_for_markdown(step.id)} ({step.kind.value}) — "
+            f"{step.status.value.upper()}"
+        )
+        lines.append(step_heading)
+        lines.append("")
+        lines.append(_sanitize_for_markdown(step.headline))
+        lines.append("")
+        if step.metrics:
+            lines.append("| Metric | Value |")
+            lines.append("|---|---|")
+            for metric in step.metrics:
+                lines.append(f"| {metric.label} | {_sanitize_for_markdown(metric.value)} |")
+            lines.append("")
+    return "\n".join(lines).rstrip("\n") + "\n"

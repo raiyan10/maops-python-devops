@@ -18,6 +18,8 @@ src/maops_pydevops/
         inventory.py            # inventory CLI orchestration: build_system_report(), build_filesystem_report()
         logs.py                   # logs CLI orchestration: build_log_parse_report(), build_log_analysis_report()
         health.py                  # health CLI orchestration: build_health_http_report(), build_health_tcp_report()
+        report.py                    # report-aggregate CLI orchestration + shared atomic --output writer
+        workflow.py                    # workflow validate/run CLI orchestration
     core/
         models.py           # enums + frozen dataclasses (doctor, tools-inspect)
         config_models.py      # config-domain enums + frozen dataclasses
@@ -37,6 +39,12 @@ src/maops_pydevops/
         health_http.py                                    # bounded HTTP availability checks (network-capable)
         health_tcp.py                                       # bounded TCP connect checks (network-capable)
         health_runner.py                                      # bounded, ordered concurrent.futures helper
+        report_models.py                                        # report-aggregate-domain enums + frozen dataclasses
+        report_reader.py                                          # bounded, fd-safe JSON report file reader
+        report_aggregate.py                                         # report-kind detection, normalization, aggregation
+        workflow_models.py                                            # workflow-domain enums + frozen dataclasses
+        workflow_parser.py                                              # TOML parsing + schema validation (no execution)
+        workflow_runner.py                                                # sequential step execution via commands/*.py
 ```
 
 ## 2. Entry points
@@ -262,6 +270,84 @@ index-addressed result list. See `docs/health-checks.md` for the full
 CLI/report contract and `docs/http-health-safety.md` for the complete
 network safety model.
 
+## 4h. Data flow: report aggregate
+
+```
+core/report_reader.py:read_report_file()      # os.lstat + O_NOFOLLOW/O_CLOEXEC open +
+                                                # os.fstat dev/inode TOCTOU check, bounded read,
+                                                # -> (dict, None, None) or (None, reason, detail)
+core/report_aggregate.py:build_aggregate_report()
+    read every path, in exact CLI order
+    core/report_aggregate.py:detect_report_kind()   # structural key-shape detection, 8 fixed kinds
+    core/report_aggregate.py:normalize_report()     # per-kind field extraction -> small typed summary
+    -> core/report_models.py:AggregateReport (frozen dataclass)
+
+cli.py:run_report_aggregate()
+    core/output.py:render_report_aggregate_text()/_json()/_markdown()
+    commands/report.py:write_report_output()    # atomic --output write, or print to stdout
+    -> exit 2 if report is None (read/detect/normalize failure),
+       1 if overall is FAIL or --output write failed, else 0
+```
+
+`detect_report_kind()` is purely structural (a fixed, unique combination
+of top-level JSON keys per kind) — there is no fallback path that accepts
+an unrecognized JSON object. `normalize_report()` never copies an entire
+input report into the aggregate; see `docs/aggregated-reports.md` for the
+complete normalization contract.
+
+## 4i. Data flow: workflow
+
+```
+core/workflow_parser.py:parse_workflow_file()   # tomllib.load() + validate_workflow_document()
+                                                 # pure parsing/type/range checks, no I/O beyond
+                                                 # reading the TOML file itself; reuses
+                                                 # core/health_http.py:validate_http_target() /
+                                                 # core/health_tcp.py:validate_tcp_target() and
+                                                 # commands/tools.py:TOOL_ALLOWLIST for target/tool
+                                                 # validation -- never executes a step
+    -> (Workflow, None) or (None, error)
+
+commands/workflow.py:build_workflow_validation_report()
+    -> core/workflow_models.py:WorkflowValidationReport
+cli.py:run_workflow_validate()
+    -> exit 0 if valid, 2 if invalid
+
+commands/workflow.py:build_workflow_run_report()
+    core/workflow_parser.py:parse_workflow_file()   # validated first, exactly as workflow validate
+    core/workflow_runner.py:run_workflow()
+        _run_step() once per declared step, in order      # calls the same build_*_report()
+            commands/doctor.py:build_report()              # functions each equivalent CLI
+            commands/tools.py:build_inspect_report()       # subcommand calls -- never a
+            commands/inventory.py:build_system_report()/   # recursive maops-py subprocess
+                build_filesystem_report()
+            commands/logs.py:build_log_analysis_report()
+            commands/health.py:build_health_http_report()/
+                build_health_tcp_report()
+        core/report_aggregate.py:normalize_report()    # reused directly on each step's own
+                                                         # real report.to_dict()
+    -> core/workflow_models.py:WorkflowRunReport (frozen dataclass)
+
+cli.py:run_workflow_run()
+    core/output.py:render_workflow_run_text()/_json()/_markdown()
+    commands/report.py:write_report_output()    # the identical atomic --output writer
+    -> exit 2 if report is None (schema/validation failure, checked before any step runs),
+       1 if overall is FAIL or --output write failed, else 0
+```
+
+`core/workflow_runner.py` is the one module under `core/` permitted to
+import from `commands/` — its entire purpose is orchestrating across
+other commands' own orchestration functions, not a parallel
+reimplementation of them. Steps always execute sequentially, in declared
+order; a step that cannot produce a report becomes a FAIL result rather
+than aborting the run, so a later failure never discards earlier steps'
+already-completed results. `inventory_filesystem`/`logs_analyze` relative
+paths resolve against the workflow file's own directory via a pure
+lexical join (`core/workflow_runner.py:_resolve_relative()`), never the
+process's actual working directory, and `os.chdir()` is never called
+anywhere in this package. See `docs/workflows.md` and
+`docs/workflow-security.md` for the complete schema, execution, and
+security contracts.
+
 ## 5. Typed models
 
 `core/models.py` defines `CheckStatus` and `OutputFormat` as
@@ -304,6 +390,24 @@ from the code. No custom exception classes are introduced anywhere: every
 public function in `core/config.py` and `core/runner.py` returns a typed
 result dataclass instead of raising past its own boundary, extending the
 same pattern `DoctorCheck.status` already established in Day 1.
+`core/report_models.py` follows the same convention for the report-
+aggregate domain: `ReportKind`, `ReportOutputFormat` as `StrEnum`;
+`ReportMetric`, `NormalizedReport`, `AggregateOptions`, `AggregateSummary`,
+`AggregateReport` as `frozen=True` dataclasses, reusing `CheckStatus` for
+per-report/aggregate status. `core/workflow_models.py` follows it for the
+workflow domain: `WorkflowStepKind`, `WorkflowValidationStatus` as
+`StrEnum`; one `frozen=True` parameter dataclass per step kind
+(`DoctorStepParams`, `ToolsInspectStepParams`,
+`InventorySystemStepParams`, `InventoryFilesystemStepParams`,
+`LogsAnalyzeStepParams`, `HealthHttpStepParams`, `HealthTcpStepParams`,
+unioned as the `StepParams` type alias — never a generic
+`dict[str, object]` step representation); `Workflow`, `WorkflowStep`,
+`WorkflowValidationReport`, `WorkflowRunOptions`, `WorkflowRunSummary`,
+`WorkflowStepResult`, `WorkflowRunReport` as `frozen=True` dataclasses,
+also reusing `CheckStatus`. `WorkflowStepResult`'s `metrics` field reuses
+`core/report_models.py:ReportMetric` directly (rather than a duplicate
+workflow-domain metric type), since `core/workflow_runner.py` calls
+`core/report_aggregate.py:normalize_report()` on each step's own report.
 
 ## 6. Exit-code convention
 
@@ -350,7 +454,8 @@ and `inventory filesystem` reads only filesystem metadata
 (`os.lstat`/`os.scandir`/`entry.stat`), never file content, never a hash.
 No module performs network I/O or dumps the full environment.
 `core/log_reader.py` is the first module in this package to open and
-read file *content* (every other module reads only metadata or fixed
+read file *content* (`core/report_reader.py` is the second, and the only
+other one — see below; every other module reads only metadata or fixed
 subprocess output): it validates a path with `os.lstat()`, opens with
 `O_NOFOLLOW`/`O_CLOEXEC`/`O_NOATIME` where available, verifies the
 opened descriptor with `os.fstat()` against a `(st_dev, st_ino)`
@@ -366,13 +471,31 @@ intentional network access, deliberately isolated to these two modules
 plus `core/health_runner.py` (permitted to import `concurrent.futures`)
 and `commands/health.py` (orchestration only). Every other module's
 "no network" invariant is unchanged and is verified by a dedicated
-regression test (`tests/unit/test_no_network_health_boundary.py`). See
+regression test (`tests/unit/test_no_network_health_boundary.py`).
+`core/report_reader.py` mirrors `core/log_reader.py`'s fd-safety pattern
+(`os.lstat()` pre-check, `O_NOFOLLOW`/`O_CLOEXEC` open, `os.fstat()`
+dev/inode TOCTOU verification) for reading JSON report file content, but
+reads the whole (bounded) document rather than a sequential line stream,
+since a report must be parsed as a single JSON object.
+`core/workflow_parser.py` reads a workflow TOML file with the simpler
+`Path.open("rb")` + `tomllib.load()` pattern `core/config.py` already
+established (a locally authored, explicitly supplied file at the same
+trust level as a configuration file), and never imports `subprocess`,
+`socket`, `ssl`, or `http.client` — see
+`tests/unit/test_workflow_no_network_no_subprocess.py`, which proves
+validating a workflow declaring every network/subprocess-capable step
+kind makes no such call. `core/workflow_runner.py` is the sole module in
+`core/` permitted to import from `commands/`, and executes steps only
+through the package's own existing `commands/*.py` orchestration
+functions — never a shell, never a recursive `maops-py` subprocess. See
 `.claude/CLAUDE.md` for the full restriction list,
 `docs/subprocess-safety.md` / `docs/configuration.md` for those two
 modules' complete contracts, `docs/inventory.md` /
-`docs/filesystem-inventory-safety.md` for the inventory modules', and
+`docs/filesystem-inventory-safety.md` for the inventory modules',
 `docs/log-parsing.md` / `docs/log-analysis.md` / `docs/log-redaction.md`
-for the log modules'.
+for the log modules', and `docs/aggregated-reports.md` /
+`docs/workflows.md` / `docs/workflow-security.md` for the report-
+aggregate and workflow modules'.
 
 ## 9. Tests
 
@@ -424,3 +547,32 @@ boundary described above: every non-health module still raises on a
 mocked `socket.socket`/`socket.create_connection` call, and the health
 modules import exactly the primitives (and none of the forbidden ones)
 they're supposed to.
+
+Report-aggregate tests never assume a fixed input schema is stable
+folklore: `tests/unit/test_report_aggregate.py` builds its fixtures
+directly from every current report model's real field names, and
+`tests/integration/test_report_cli_integration.py` aggregates the
+*actual* JSON produced by real `doctor`/`inventory system` subprocess
+invocations rather than hand-typed fixtures alone, so a schema drift in
+any source command's `to_dict()` would break this test, not silently
+pass. `test_report_reader_error_paths.py` and
+`test_report_aggregate_error_paths.py` exercise the fd-safety and
+per-kind malformed-field branches with `monkeypatch`, mirroring
+`test_log_reader_error_paths.py`'s established pattern.
+
+Workflow tests never depend on real subprocess-launch or network timing
+where a deterministic alternative exists:
+`tests/unit/test_workflow_runner.py`/`test_workflow_runner_step_kinds.py`
+monkeypatch each `commands/*.py` build function `core/workflow_runner.py`
+imports by name, proving sequential ordering, prior-result preservation,
+and relative-path resolution without depending on any real command's
+actual behavior. `tests/integration/test_workflow_health_loopback.py`
+exercises real `health_http`/`health_tcp` workflow steps, but only
+against the same real, locally bound `127.0.0.1` fixtures the standalone
+health-command loopback tests use. `test_health_tcp_loopback.py`'s
+reversed-completion-order coverage deliberately avoids a delayed-listener
+design (racy against interpreter-startup jitter observed empirically in
+this project's own CI-adjacent environments) in favor of a target that
+retries with a real, fixed sleep entirely internal to the one subprocess
+under test — a fully deterministic timing differential with no
+cross-process race.

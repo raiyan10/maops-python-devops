@@ -124,7 +124,55 @@ and `output_format` only.
   `socket`, `ipaddress`, `concurrent.futures`, and `urllib.parse` are all
   standard library.
 
-## Post-v0.5.0 possibilities
+## Completed in v0.6.0
+
+- `maops-py report aggregate REPORT [REPORT ...] [--format
+  text|json|markdown] [--output PATH] [--force]` — reads one or more
+  `maops-py` JSON report files and produces a single, normalized summary.
+  Report kind is detected purely structurally (a fixed, unique key
+  combination per one of eight supported kinds) — never heuristically.
+  Each detected report is normalized into a small, explicitly typed
+  summary; the full input document is never blindly embedded. Bounded
+  (max 50 files, 5 MiB each by default) and fd-safety-hardened the same
+  way `core/log_reader.py` reads log content. See
+  `docs/aggregated-reports.md`.
+- `maops-py workflow validate FILE [--format text|json]` / `maops-py
+  workflow run FILE [--format text|json|markdown] [--output PATH]
+  [--force]` — declarative TOML automation workflows (`schema_version =
+  1`, max 32 `[[steps]]`) over seven step kinds (`doctor`,
+  `tools_inspect`, `inventory_system`, `inventory_filesystem`,
+  `logs_analyze`, `health_http`, `health_tcp`), each executed through the
+  package's own real internal APIs — never a shell command, never a
+  recursive `maops-py` subprocess, never `eval`/`exec`, loops,
+  conditions, templating, or scheduling. `workflow validate` performs no
+  execution, network, or subprocess activity at all. Steps always
+  execute sequentially in declared order; a failed step never discards
+  already-completed results. Relative `inventory_filesystem`/
+  `logs_analyze` paths resolve against the workflow file's own directory,
+  never the process cwd (which is never mutated). See `docs/workflows.md`
+  and `docs/workflow-security.md`.
+- New typed models in `core/report_models.py` and `core/workflow_models.py`,
+  following the existing frozen-dataclass, explicit-serialization
+  conventions; `core/workflow_runner.py` reuses
+  `core/report_aggregate.py`'s normalization directly on each workflow
+  step's own real report, so a step's summary and an aggregated report's
+  summary for the same underlying command share one code path.
+- Nine Day 5 carry-forward findings resolved: Unicode bidi-override/
+  zero-width formatting-character text sanitization, TCP-only
+  `overall: "warn"` orchestration test coverage, strengthened health JSON
+  field-type assertions, a loopback test proving the original HTTP query
+  value reaches the server while the report shows only the redacted form,
+  a deterministic TCP reversed-completion-order integration test, health
+  report-builder `MIN_TARGETS` boundary coverage, a regression test
+  proving the health smoke check is wired into `make smoke-install`, a
+  CHANGELOG note documenting that smoke-install exercises real loopback
+  network I/O, and stale `0.4.0` example versions in
+  `docs/log-parsing.md`/`docs/log-analysis.md`.
+- Still zero third-party runtime dependencies: every new module uses only
+  `tomllib`, `os`, `stat`, `errno`, `json`, `tempfile`, `contextlib`, and
+  `pathlib` — all already-used standard library.
+
+## Post-v0.6.0 possibilities
 
 These are not committed, scheduled, or designed yet — listed only as
 plausible next steps, to be scoped on their own day:
@@ -151,3 +199,18 @@ plausible next steps, to be scoped on their own day:
   certificate/hostname verification staying mandatory, with no bypass
   option, is a deliberate safety invariant of this feature, not merely a
   Day 5 scoping gap.
+- A scheduler or cron integration for `workflow run`, should a real use
+  case for it emerge — Day 6 deliberately ships a synchronous,
+  run-once-per-invocation command only; see
+  `docs/workflow-security.md`'s closing section for why this is a
+  deliberate scoping decision, not an oversight.
+- Conditional or looping workflow steps, and inter-step variable
+  substitution, should a real use case for them emerge — Day 6
+  deliberately ships a fixed, sequential, always-run-every-step model
+  with no templating of any kind. Adding either would materially change
+  the "declarative data, never executable code" safety property
+  `docs/workflow-security.md` establishes, so it would need its own
+  design and review, not an incremental extension.
+- A user-defined or plugin-supplied workflow step kind, should a real use
+  case for it emerge — Day 6 deliberately ships a fixed, closed
+  seven-kind enum with no registration or dynamic-loading mechanism.

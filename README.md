@@ -22,8 +22,10 @@ subprocess execution layer, demonstrated through an allowlisted,
 read-only tool-inspection command. Day 3 / v0.3.0 added typed, structured,
 read-only system and filesystem inventory. Day 4 / v0.4.0 added bounded,
 typed log parsing and deterministic operational event analysis. Day 5 /
-v0.5.0 adds bounded HTTP and TCP availability checks — the package's
-first feature permitted to make network connections:
+v0.5.0 added bounded HTTP and TCP availability checks — the package's
+first feature permitted to make network connections. Day 6 / v0.6.0 adds
+aggregated operational reports and declarative, sequential automation
+workflows:
 
 - A `src`-layout, stdlib-only Python package (`maops_pydevops`) —
   `tomllib` (standard library since Python 3.11) is the only addition,
@@ -73,6 +75,25 @@ first feature permitted to make network connections:
   other command's existing network prohibition is unchanged. See
   [docs/health-checks.md](docs/health-checks.md) and
   [docs/http-health-safety.md](docs/http-health-safety.md) for the
+  complete contracts.
+- `report aggregate` — reads one or more `maops-py` JSON report files,
+  structurally detects which of eight supported report kinds each one
+  is, and normalizes each into a small, typed summary (never a blind
+  copy of the input) rolled up into one `pass`/`warn`/`fail` view.
+  Bounded, symlink-refusing, fd-safe input handling; secure atomic
+  `--output` export (mode `0600`, `--force`-gated overwrite, symlink
+  target always refused). See
+  [docs/aggregated-reports.md](docs/aggregated-reports.md).
+- `workflow validate` / `workflow run` — declarative TOML automation
+  workflows (max 32 steps) over a fixed set of seven step kinds, each
+  executed through the package's own existing internal APIs — never a
+  shell command, never a recursive `maops-py` subprocess, never
+  `eval`/`exec`, loops, conditions, or scheduling. `workflow validate`
+  parses and schema-validates only, performing no execution, network, or
+  subprocess activity. Steps always run sequentially, in declared order;
+  a failed step never discards already-completed results. See
+  [docs/workflows.md](docs/workflows.md) and
+  [docs/workflow-security.md](docs/workflow-security.md) for the
   complete contracts.
 - A full local quality gate (formatting, linting, strict typing, tests,
   coverage, build, isolated smoke-install) and a matching CI workflow.
@@ -148,6 +169,15 @@ maops-py health http https://a.example/ https://b.example/ --retries 2 --workers
 maops-py health tcp 127.0.0.1:3306
 maops-py health tcp example.com:443 [::1]:8080 --timeout 5 --format json
 
+maops-py report aggregate doctor.json health.json
+maops-py report aggregate doctor.json health.json --format markdown
+maops-py report aggregate doctor.json health.json --format json --output summary.json
+
+maops-py workflow validate release.toml
+maops-py workflow validate release.toml --format json
+maops-py workflow run release.toml
+maops-py workflow run release.toml --format markdown --output report.md
+
 # Equivalent module invocation
 python -m maops_pydevops --version
 python -m maops_pydevops doctor --format json
@@ -156,6 +186,8 @@ python -m maops_pydevops inventory system --format json
 python -m maops_pydevops logs parse app.log --format json
 python -m maops_pydevops logs analyze app.log --format json
 python -m maops_pydevops health http https://example.com/health --format json
+python -m maops_pydevops report aggregate doctor.json health.json --format json
+python -m maops_pydevops workflow run release.toml --format json
 python -m maops_pydevops health tcp 127.0.0.1:3306 --format json
 ```
 
@@ -811,6 +843,8 @@ src/maops_pydevops/
         inventory.py              # inventory CLI orchestration
         logs.py                     # logs parse/analyze orchestration
         health.py                     # health http/tcp orchestration
+        report.py                       # report-aggregate orchestration + atomic --output writer
+        workflow.py                       # workflow validate/run orchestration
     core/
         models.py             # enums + frozen dataclasses (doctor, tools)
         config_models.py         # config-domain enums + frozen dataclasses
@@ -830,6 +864,12 @@ src/maops_pydevops/
         health_http.py                                        # bounded HTTP checks (network-capable)
         health_tcp.py                                           # bounded TCP checks (network-capable)
         health_runner.py                                         # bounded, ordered concurrency helper
+        report_models.py                                          # report-aggregate-domain enums + dataclasses
+        report_reader.py                                            # bounded, fd-safe JSON report reader
+        report_aggregate.py                                           # report-kind detection + normalization
+        workflow_models.py                                              # workflow-domain enums + dataclasses
+        workflow_parser.py                                                # TOML parsing + schema validation
+        workflow_runner.py                                                  # sequential step execution
 tests/
     unit/
     integration/
@@ -845,6 +885,9 @@ docs/
     log-redaction.md
     health-checks.md
     http-health-safety.md
+    aggregated-reports.md
+    workflows.md
+    workflow-security.md
     roadmap.md
     troubleshooting.md
     engineering-reviews/
@@ -858,7 +901,7 @@ docs/
 
 ## Roadmap
 
-See [docs/roadmap.md](docs/roadmap.md) for what's implemented in v0.5.0
+See [docs/roadmap.md](docs/roadmap.md) for what's implemented in v0.6.0
 and what's under consideration for future releases.
 
 ## License

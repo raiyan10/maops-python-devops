@@ -34,6 +34,8 @@ src/maops_pydevops/
         inventory.py           # inventory CLI orchestration, build_system_report()/build_filesystem_report()
         logs.py                  # logs CLI orchestration, build_log_parse_report()/build_log_analysis_report()
         health.py                  # health CLI orchestration, build_health_http_report()/build_health_tcp_report()
+        report.py                    # report-aggregate orchestration + atomic --output writer
+        workflow.py                    # workflow validate/run orchestration
     core/
         models.py          # enums + frozen dataclasses (doctor, tools-inspect)
         config_models.py     # config-domain enums + frozen dataclasses
@@ -53,6 +55,12 @@ src/maops_pydevops/
         health_http.py                                    # bounded HTTP availability checks (network-capable)
         health_tcp.py                                       # bounded TCP connect checks (network-capable)
         health_runner.py                                      # bounded, ordered concurrent.futures helper
+        report_models.py                                        # report-aggregate-domain enums + frozen dataclasses
+        report_reader.py                                          # bounded, fd-safe JSON report file reader
+        report_aggregate.py                                         # report-kind detection, normalization, aggregation
+        workflow_models.py                                            # workflow-domain enums + frozen dataclasses
+        workflow_parser.py                                              # TOML parsing + schema validation (no execution)
+        workflow_runner.py                                                # sequential step execution via commands/*.py
 ```
 
 Parser construction (`build_parser()`) must never contain command logic;
@@ -121,6 +129,18 @@ exit codes differently per command (`doctor` vs. `tools inspect` vs.
   `monkeypatch` rather than depending on real ownership/permission
   state. Parser and analysis tests must never depend on the real host
   clock, locale, or timezone.
+- Report-reader tests must simulate every fd-safety adversarial condition
+  the same way (`monkeypatch`, never real permission/ownership state) and
+  must never assume a source command's JSON schema is stable folklore —
+  prefer fixtures built from the real model field names, or from real
+  command JSON output, over hand-typed schema guesses. Workflow-runner
+  tests must monkeypatch the individual `commands/*.py` build functions
+  `core/workflow_runner.py` imports by name rather than depending on any
+  real command's actual host-dependent behavior. A timing-based test
+  (e.g. proving completion-order independence under concurrency) must
+  produce its timing differential from code entirely internal to the one
+  process/subprocess under test — never from racing that process's own
+  startup jitter against a second process or thread's independent timer.
 
 ## Security restrictions
 
@@ -128,7 +148,13 @@ No `shell=True`, `os.system`, `eval`, `exec`, `pickle`, `sudo`, service or
 process mutation, environment-variable dumping, secret or token
 collection, writes outside build/test temp directories, silent exception
 swallowing, import-time side effects, or global logging configuration on
-import. Network access is forbidden everywhere **except**
+import. The "writes outside build/test temp directories" restriction has
+two narrowly scoped exceptions: `core/config.py` (under the resolved
+configuration path only) and `commands/report.py`'s
+`write_report_output()` (under an explicit, user-supplied `--output`
+path only, for `report aggregate --output`/`workflow run --output`) —
+see their respective paragraphs below. Network access is forbidden
+everywhere **except**
 `core/health_http.py`/`core/health_tcp.py` (and their orchestration via
 `core/health_runner.py`/`commands/health.py`) — see the `core/health_*.py`
 paragraph below for the full, narrowly scoped exception and
@@ -228,6 +254,61 @@ string is never retained on any object. See `docs/health-checks.md` and
 `docs/http-health-safety.md` for the complete CLI/report/safety
 contracts.
 
+`core/report_reader.py` is the second module in this package (after
+`core/log_reader.py`) permitted to open and read file *content*: it
+validates a `report aggregate` input path with `os.lstat()`, opens with
+`O_NOFOLLOW`/`O_CLOEXEC`, verifies the descriptor with `os.fstat()`
+against a `(st_dev, st_ino)` comparison to the pre-open `lstat()` result,
+and reads a single bounded chunk (never `mmap`, never unbounded) — a
+report file is a small, whole JSON document, unlike a log file's
+unbounded line stream, so no sequential-chunk reader is needed.
+`core/report_aggregate.py` detects a report's kind purely structurally
+(a fixed, unique JSON key combination per one of eight supported kinds)
+and never heuristically accepts an unrecognized JSON object; its
+normalization never blindly embeds a full input report into the
+aggregate output. `commands/report.py` is permitted to write outside a
+build/test temp directory for exactly one purpose: `report aggregate
+--output PATH`'s atomic write (mode `0600`, `os.replace()`-based
+installation, `--force`-gated overwrite, symbolic-link target always
+refused, parent directory never created) — the same pattern
+`core/config.py`'s `init_config_file()` already established, extended to
+an explicit, user-supplied `--output` path rather than the fixed
+configuration directory. `commands/workflow.py`'s `workflow run
+--output` reuses this exact function.
+
+`core/workflow_parser.py` parses and schema-validates a `workflow`
+TOML file (`Path.open("rb")` + `tomllib.load()`, the same simple pattern
+`core/config.py` uses for configuration files) and performs no execution,
+network, or subprocess activity of any kind — it never imports
+`subprocess`, `socket`, `ssl`, or `http.client`. It reuses
+`core/health_http.py`'s `validate_http_target()` and
+`core/health_tcp.py`'s `validate_tcp_target()` (both pure syntax/
+semantics checks with no network I/O) to validate `health_http`/
+`health_tcp` step targets, and `commands/tools.py`'s `TOOL_ALLOWLIST` to
+validate `tools_inspect` step tool names — a workflow's target/tool
+mistakes are caught with the identical rules the equivalent CLI
+subcommands enforce, never a second, independently maintained copy of
+them. `core/workflow_runner.py` is the sole module under `core/`
+permitted to import from `commands/`: its entire purpose is executing
+each declared step through the package's own existing `commands/*.py`
+orchestration functions (`build_report()`, `build_inspect_report()`,
+`build_system_report()`/`build_filesystem_report()`,
+`build_log_analysis_report()`, `build_health_http_report()`/
+`build_health_tcp_report()`) — never a shell command, never a recursive
+`maops-py` subprocess, never `eval`/`exec`, dynamic imports, command
+templates, loops, conditions, cron scheduling, plugins, or SSH. Steps
+always execute sequentially in declared order; a step that cannot
+produce a report becomes a `fail` result rather than aborting the run, so
+a later failure never discards earlier steps' already-completed results.
+Relative `inventory_filesystem`/`logs_analyze` step paths resolve against
+the workflow file's own directory via a pure lexical
+`os.path.abspath()`-style join — never the process's actual working
+directory, and `os.chdir()` is never called anywhere in this package.
+Workflow bounds: maximum `32` steps, `1`-`100` targets per
+`health_http`/`health_tcp` step (the existing `health http`/`health tcp`
+bound). See `docs/aggregated-reports.md`, `docs/workflows.md`, and
+`docs/workflow-security.md` for the complete contracts.
+
 ## Exit-code convention
 
 - `0` — success
@@ -249,7 +330,15 @@ exits `1`, in addition to the file itself being unreadable.
 retries): report `overall` of `pass` or `warn` exits `0`, `fail` exits
 `1`, and a target-count/syntax/privacy validation failure — checked
 before any connection is attempted — exits `2`. See
-`docs/health-checks.md` for the complete semantics.
+`docs/health-checks.md` for the complete semantics. `report aggregate`
+and `workflow run` share one convention: `overall` `pass`/`warn` exits
+`0`, `fail` exits `1` (as does a failed atomic `--output` write); a
+usage/validation failure checked before any report is read, or before any
+workflow step runs — an out-of-bounds report/step count, a malformed or
+unrecognized report file, or a schema-invalid workflow file — exits `2`.
+`workflow validate` exits `0` for a valid workflow, `2` for an invalid
+one. See `docs/aggregated-reports.md` and `docs/workflows.md` for the
+complete semantics.
 
 ## Versioning policy
 

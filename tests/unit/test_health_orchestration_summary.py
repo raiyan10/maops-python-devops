@@ -153,6 +153,66 @@ def test_warn_only_no_fail_is_overall_warn(monkeypatch: pytest.MonkeyPatch) -> N
     assert report.summary.failed == 0
 
 
+def test_warn_only_no_fail_is_overall_warn_tcp(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: dict[str, int] = {}
+
+    def _flaky_then_ok(target: object, **kwargs: object) -> TcpOutcome:
+        calls["n"] = calls.get("n", 0) + 1
+        if calls["n"] == 1:
+            return TcpOutcome(
+                success=False,
+                peer_ip=None,
+                failure_reason=health_tcp.TcpFailureReason.CONNECTION_REFUSED,
+                detail="d",
+                duration_ms=1,
+                retryable=True,
+            )
+        return TcpOutcome(
+            success=True,
+            peer_ip="127.0.0.1",
+            failure_reason=None,
+            detail=None,
+            duration_ms=1,
+            retryable=False,
+        )
+
+    monkeypatch.setattr(health_tcp, "_perform_tcp_attempt", _flaky_then_ok)
+    report, error = build_health_tcp_report(
+        ["a.example:1"], timeout_seconds=1.0, retries=1, retry_delay_seconds=0.01, workers=1
+    )
+    assert error is None
+    assert report is not None
+    assert report.overall.value == "warn"
+    assert report.summary.warned == 1
+    assert report.summary.failed == 0
+    assert report.summary.passed == 0
+
+
+def test_build_health_http_report_zero_targets_is_min_targets_boundary_error() -> None:
+    report, error = build_health_http_report(
+        [],
+        method=HttpMethod.GET,
+        expected_status_min=200,
+        expected_status_max=399,
+        timeout_seconds=1.0,
+        retries=0,
+        retry_delay_seconds=0.01,
+        workers=1,
+    )
+    assert report is None
+    assert error is not None
+    assert "got 0" in error
+
+
+def test_build_health_tcp_report_zero_targets_is_min_targets_boundary_error() -> None:
+    report, error = build_health_tcp_report(
+        [], timeout_seconds=1.0, retries=0, retry_delay_seconds=0.01, workers=1
+    )
+    assert report is None
+    assert error is not None
+    assert "got 0" in error
+
+
 def test_mixed_pass_warn_fail_tcp_summary_and_overall(monkeypatch: pytest.MonkeyPatch) -> None:
     call_counts: dict[str, int] = {}
 

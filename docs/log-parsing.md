@@ -205,7 +205,7 @@ this issue.
 
 ```json
 {
-  "version": "0.4.0",
+  "version": "0.6.0",
   "path": "/tmp/demo.log",
   "options": {
     "input_format": "auto",

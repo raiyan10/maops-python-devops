@@ -5,6 +5,167 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-08-10
+
+Adds two new capabilities: aggregating multiple `maops-py` JSON reports
+into a single normalized summary, and declarative, sequential automation
+workflows (TOML) that run a fixed, closed set of existing `maops-py`
+checks — never arbitrary shell commands, never a recursive `maops-py`
+subprocess. Also resolves nine confirmed non-blocking findings deferred
+from the Day 5 review. The toolkit remains standard-library-only at
+runtime.
+
+### Added
+
+- `maops-py report aggregate REPORT [REPORT ...] [--format
+  text|json|markdown] [--output PATH] [--force]` — reads one or more
+  `maops-py` JSON report files (in the exact order given), structurally
+  detects which of the eight supported report kinds (`doctor`,
+  `tools_inspect`, `inventory_system`, `inventory_filesystem`,
+  `logs_parse`, `logs_analyze`, `health_http`, `health_tcp`) each one is,
+  and normalizes each into a small, explicitly typed summary (`status`, a
+  one-line `headline`, and a bounded set of typed `metrics`) — never a
+  blind copy of the input document. Input is bounded (max 50 report
+  files, 5 MiB each by default) and safety-hardened the same way
+  `core/log_reader.py` reads log content: `os.lstat()` pre-check,
+  `O_NOFOLLOW`/`O_CLOEXEC` open, `os.fstat()` dev/inode TOCTOU
+  verification — regular files only, symlinks and non-regular files (a
+  directory, a FIFO, a socket special file) are always rejected. A
+  malformed-JSON, oversized, non-UTF-8, non-object, or structurally
+  unrecognized report is a controlled `(report, error)` validation
+  failure (exit `2`), never an uncaught traceback. Aggregate `overall` is
+  `fail` if any normalized report is `fail`, `warn` if none fail and at
+  least one warns, `pass` otherwise.
+- `maops-py workflow validate FILE [--format text|json]` / `maops-py
+  workflow run FILE [--format text|json|markdown] [--output PATH]
+  [--force]` — a declarative TOML workflow format (`schema_version = 1`,
+  `name`, one or more `[[steps]]`, max 32) over seven supported step
+  kinds (`doctor`, `tools_inspect`, `inventory_system`,
+  `inventory_filesystem`, `logs_analyze`, `health_http`, `health_tcp`),
+  each executed through the package's own real internal APIs
+  (`commands/doctor.py`, `commands/tools.py`, `commands/inventory.py`,
+  `commands/logs.py`, `commands/health.py`) — never a recursive
+  `maops-py` subprocess, never a shell, never `eval`/`exec`, dynamic
+  imports, command templates, loops, conditions, or scheduling. `workflow
+  validate` parses and schema-validates only — it never executes a step,
+  resolves a tool executable, or opens a socket, and reuses the actual
+  `health http`/`health tcp` target validators and the real `tools
+  inspect` allowlist so a workflow's target/tool mistakes are caught with
+  the identical rules the equivalent CLI subcommands enforce, not a
+  second, potentially drifting copy of them. `workflow run` executes
+  every declared step sequentially, always in declared order; a step that
+  cannot produce a report (a bad filesystem root, an unreachable target)
+  becomes a `fail` result rather than aborting the run, so a later
+  failure never discards earlier steps' already-completed results.
+  Relative step paths (`inventory_filesystem`'s `path`, `logs_analyze`'s
+  `path`) resolve against the workflow file's own directory via a pure
+  lexical `os.path.abspath()` join — never the process's actual working
+  directory, and the process's cwd is never mutated. Workflow overall
+  status/exit-code semantics mirror `report aggregate`'s exactly.
+- New typed models in `core/report_models.py` (`ReportKind`,
+  `ReportMetric`, `NormalizedReport`, `AggregateOptions`,
+  `AggregateSummary`, `AggregateReport`, `ReportOutputFormat`) and
+  `core/workflow_models.py` (`WorkflowStepKind`, per-kind step-parameter
+  dataclasses, `Workflow`, `WorkflowStep`, `WorkflowValidationReport`,
+  `WorkflowRunReport`, `WorkflowStepResult`), following the existing
+  frozen-dataclass, explicit-serialization, tuple-collection conventions.
+  `core/workflow_runner.py` reuses `core/report_aggregate.py`'s
+  normalization directly on each step's own real, in-memory report
+  object (via its existing `to_dict()`), so a workflow step's summary and
+  an aggregated report's summary for the same underlying command are
+  produced by one shared code path, not two.
+- Both `--format markdown` outputs (`report aggregate`, `workflow run`)
+  and the existing text renderer share one sanitization boundary: every
+  externally sourced string (a report path, a hostname, a log message) is
+  escaped for control characters, Unicode bidi-override/zero-width
+  formatting characters, and (Markdown only) table/emphasis-breaking
+  characters before being interpolated into a line — see "Fixed" below
+  for the bidi/zero-width half of this, which was a Day 5 carry-forward
+  finding.
+- Secure atomic `--output PATH` export (shared by `report aggregate` and
+  `workflow run`): mode `0600`, `os.replace()`-based atomic installation,
+  refuses an existing target unless `--force`, always refuses a symbolic
+  link target even with `--force`, requires the parent directory to
+  already exist (never creates it), and leaves no temporary file behind
+  on any failure path.
+- `docs/aggregated-reports.md`, `docs/workflows.md`, and
+  `docs/workflow-security.md` documenting the report-kind detection and
+  normalization contract, the full workflow schema and step-kind
+  reference, bounds, status/exit-code semantics, secure export behavior,
+  and the "declarative data, never executable code" security model in
+  full — including an explicit statement that there is no scheduler or
+  cron feature in this release.
+
+### Fixed
+
+Resolves the following findings deferred from the Day 5 engineering
+review:
+
+- Untrusted text rendered into a text (or Markdown) report is now also
+  escaped for Unicode bidi-override (`U+202A`-`U+202E`, `U+2066`-`U+2069`)
+  and zero-width (`U+200B`-`U+200F`, `U+FEFF`) formatting characters, not
+  just C0 control characters — a crafted value could previously use these
+  to visually reorder or hide report text without tripping the existing
+  control-character escaping.
+- Added `health tcp`-only `overall: "warn"` orchestration coverage
+  (`tests/unit/test_health_orchestration_summary.py`) — previously only
+  `health http` had a dedicated "warns but never fails" unit test.
+- Strengthened `health http`/`health tcp` JSON field-type assertions to
+  cover every field of `options` and `summary` (method, expected-status
+  bounds, retry/worker settings, TLS-verify/follow-redirects booleans,
+  and every summary counter) — previously several fields were unchecked.
+- Added a loopback HTTP integration test
+  (`test_original_query_value_reaches_server_but_report_shows_only_redacted`)
+  proving, in one request, that the original unredacted query value
+  actually reaches the local server on the wire while the CLI's JSON
+  report contains only the `[REDACTED]` form — previously only the
+  report-side redaction half was asserted.
+- Added a TCP reversed-completion-order integration test
+  (`test_mixed_target_ordering_survives_reversed_completion` in
+  `test_health_tcp_loopback.py`), mirroring the existing HTTP coverage.
+  Deliberately does not use a delayed-listener/retry-recovery timing
+  design (racy against interpreter-startup jitter, as the file's own
+  docstring already warns for a plain refused-then-recovers test);
+  instead a target that is reserved but never listened on retries with a
+  real, fixed sleep between attempts entirely internal to the single
+  health-check subprocess under test, giving a fully deterministic timing
+  differential with no cross-process race.
+- Added `MIN_TARGETS` report-builder boundary coverage
+  (`build_health_http_report([])`/`build_health_tcp_report([])`) —
+  previously only the `MAX_TARGETS` (101-target) boundary was tested.
+- Added a regression test
+  (`test_smoke_install_wires_in_health_smoke_check`) proving
+  `scripts/smoke/health_smoke_check.py` is actually wired into `make
+  smoke-install`'s recipe, and against the *installed wheel's* own
+  `maops-py` executable specifically.
+- `docs/log-parsing.md` and `docs/log-analysis.md`'s example JSON output
+  no longer shows a stale `0.4.0` version value.
+- `workflow validate --format text` and `workflow run --format text` no
+  longer interpolate `path`, `workflow_name`, and `step.id` unescaped.
+  These four fields were missing the same `_sanitize_for_text()` call
+  every other externally sourced field in both renderers (and both
+  Markdown sibling renderers) already receives; a crafted workflow file
+  name, path, or step `id` containing embedded newlines could forge
+  extra `Status:`/`Workflow:`/`Overall status:` lines in the CLI's
+  default output format. `--format json` was never affected. Added
+  regression tests (`test_validate_text_output_sanitizes_name_and_path`,
+  `test_run_text_output_sanitizes_step_id`,
+  `test_run_text_output_sanitizes_path`) in
+  `tests/unit/test_cli_workflow.py` pinning all four fields against
+  reintroduction.
+
+### Changed
+
+- Documented (not structurally changed) that `make smoke-install`'s
+  health-check smoke step (`scripts/smoke/health_smoke_check.py`)
+  exercises real network I/O against ephemeral `127.0.0.1` listeners the
+  script itself starts and owns — not simulated or mocked — for the
+  `maops-py` executable extracted from the installed wheel. This has been
+  true since 0.5.0 but was previously undocumented.
+- The deliberate fixed (non-jittered) health-check retry policy is
+  unchanged — a Day 5 review observation, not a defect, per
+  `docs/health-checks.md`'s existing "Retryable conditions" section.
+
 ## [0.5.0] - 2026-08-08
 
 Adds bounded HTTP and TCP availability ("health") checks — the toolkit's

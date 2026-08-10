@@ -56,12 +56,23 @@ def test_http_report_json_field_types(monkeypatch: pytest.MonkeyPatch) -> None:
     assert isinstance(data["version"], str)
     assert isinstance(data["protocol"], str)
     assert isinstance(data["options"], dict)
-    assert isinstance(data["options"]["timeout_seconds"], float)
-    assert isinstance(data["options"]["retries"], int)
-    assert isinstance(data["options"]["follow_redirects"], bool)
-    assert isinstance(data["options"]["tls_verify"], bool)
+    options = data["options"]
+    assert isinstance(options["method"], str)
+    assert isinstance(options["expected_status_min"], int)
+    assert isinstance(options["expected_status_max"], int)
+    assert isinstance(options["timeout_seconds"], float)
+    assert isinstance(options["retries"], int)
+    assert isinstance(options["retry_delay_seconds"], float)
+    assert isinstance(options["workers"], int)
+    assert isinstance(options["follow_redirects"], bool)
+    assert isinstance(options["tls_verify"], bool)
     assert isinstance(data["summary"], dict)
-    assert isinstance(data["summary"]["targets"], int)
+    summary = data["summary"]
+    assert isinstance(summary["targets"], int)
+    assert isinstance(summary["passed"], int)
+    assert isinstance(summary["warned"], int)
+    assert isinstance(summary["failed"], int)
+    assert isinstance(summary["attempts"], int)
     assert isinstance(data["results"], list)
 
     result = data["results"][0]
@@ -92,6 +103,20 @@ def test_tcp_report_json_field_types(monkeypatch: pytest.MonkeyPatch) -> None:
     assert error is None
     assert report is not None
     data = json.loads(report.to_json())
+
+    assert isinstance(data["options"], dict)
+    options = data["options"]
+    assert isinstance(options["timeout_seconds"], float)
+    assert isinstance(options["retries"], int)
+    assert isinstance(options["retry_delay_seconds"], float)
+    assert isinstance(options["workers"], int)
+    assert isinstance(data["summary"], dict)
+    summary = data["summary"]
+    assert isinstance(summary["targets"], int)
+    assert isinstance(summary["passed"], int)
+    assert isinstance(summary["warned"], int)
+    assert isinstance(summary["failed"], int)
+    assert isinstance(summary["attempts"], int)
 
     result = data["results"][0]
     assert isinstance(result["host"], str)
