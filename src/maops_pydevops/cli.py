@@ -24,7 +24,12 @@ from maops_pydevops.commands.doctor import build_report
 from maops_pydevops.commands.health import build_health_http_report, build_health_tcp_report
 from maops_pydevops.commands.inventory import build_filesystem_report, build_system_report
 from maops_pydevops.commands.logs import build_log_analysis_report, build_log_parse_report
+from maops_pydevops.commands.report import build_report_aggregate, write_report_output
 from maops_pydevops.commands.tools import TOOL_ALLOWLIST, build_inspect_report
+from maops_pydevops.commands.workflow import (
+    build_workflow_run_report,
+    build_workflow_validation_report,
+)
 from maops_pydevops.core.config import resolve_effective_config
 from maops_pydevops.core.config_models import (
     MAX_COMMAND_TIMEOUT_SECONDS,
@@ -52,10 +57,21 @@ from maops_pydevops.core.output import (
     render_logs_analyze_text,
     render_logs_parse_json,
     render_logs_parse_text,
+    render_report_aggregate_json,
+    render_report_aggregate_markdown,
+    render_report_aggregate_text,
     render_text,
     render_tools_inspect_json,
     render_tools_inspect_text,
+    render_workflow_run_json,
+    render_workflow_run_markdown,
+    render_workflow_run_text,
+    render_workflow_validate_json,
+    render_workflow_validate_text,
 )
+from maops_pydevops.core.report_models import AggregateReport, ReportOutputFormat
+from maops_pydevops.core.report_reader import MAX_REPORT_COUNT
+from maops_pydevops.core.workflow_models import WorkflowRunReport, WorkflowValidationStatus
 from maops_pydevops.version import get_version
 
 PROG_NAME = "maops-py"
@@ -526,6 +542,66 @@ def build_parser() -> argparse.ArgumentParser:
         help="Output format (default: effective output_format).",
     )
 
+    report_parser = subparsers.add_parser(
+        "report", help="Aggregate multiple maops-py JSON reports into one summary."
+    )
+    report_subparsers = report_parser.add_subparsers(dest="report_command", required=True)
+
+    report_aggregate_parser = report_subparsers.add_parser(
+        "aggregate", help="Aggregate one or more maops-py JSON reports."
+    )
+    report_aggregate_parser.add_argument(
+        "reports",
+        nargs="+",
+        help=f"Report JSON files to aggregate, in order (max {MAX_REPORT_COUNT}).",
+    )
+    report_aggregate_parser.add_argument(
+        "--format",
+        choices=[fmt.value for fmt in ReportOutputFormat],
+        default=ReportOutputFormat.TEXT.value,
+        help="Output format (default: text).",
+    )
+    report_aggregate_parser.add_argument(
+        "--output", default=None, help="Write output to PATH instead of stdout."
+    )
+    report_aggregate_parser.add_argument(
+        "--force", action="store_true", help="Overwrite an existing --output file."
+    )
+
+    workflow_parser = subparsers.add_parser(
+        "workflow", help="Validate and run declarative maops-py automation workflows."
+    )
+    workflow_subparsers = workflow_parser.add_subparsers(dest="workflow_command", required=True)
+
+    workflow_validate_parser = workflow_subparsers.add_parser(
+        "validate",
+        help="Validate a workflow file. Performs no execution, network, or subprocess activity.",
+    )
+    workflow_validate_parser.add_argument("file", help="Workflow TOML file to validate.")
+    workflow_validate_parser.add_argument(
+        "--format",
+        choices=[fmt.value for fmt in OutputFormat],
+        default=OutputFormat.TEXT.value,
+        help="Output format (default: text).",
+    )
+
+    workflow_run_parser = workflow_subparsers.add_parser(
+        "run", help="Validate, then sequentially execute, a workflow file's declared steps."
+    )
+    workflow_run_parser.add_argument("file", help="Workflow TOML file to run.")
+    workflow_run_parser.add_argument(
+        "--format",
+        choices=[fmt.value for fmt in ReportOutputFormat],
+        default=ReportOutputFormat.TEXT.value,
+        help="Output format (default: text).",
+    )
+    workflow_run_parser.add_argument(
+        "--output", default=None, help="Write output to PATH instead of stdout."
+    )
+    workflow_run_parser.add_argument(
+        "--force", action="store_true", help="Overwrite an existing --output file."
+    )
+
     return parser
 
 
@@ -873,6 +949,92 @@ def run_health_tcp(
     return EXIT_SUCCESS if report.overall is not CheckStatus.FAIL else EXIT_FAILURE
 
 
+def _render_aggregate_content(report: AggregateReport, output_format: ReportOutputFormat) -> str:
+    if output_format is ReportOutputFormat.JSON:
+        return render_report_aggregate_json(report) + "\n"
+    if output_format is ReportOutputFormat.MARKDOWN:
+        return render_report_aggregate_markdown(report)
+    return render_report_aggregate_text(report)
+
+
+def run_report_aggregate(
+    report_paths: Sequence[str], format_arg: str, output_arg: str | None, force: bool
+) -> int:
+    """Aggregate one or more maops-py JSON reports into a single summary.
+
+    Exits 2 for a report-count, file-read, detection, or normalization
+    validation failure -- checked, and short-circuiting, before any
+    aggregate is built. Exits 1 if the built aggregate's overall is FAIL,
+    or if writing ``--output`` fails. Exits 0 for overall pass/warn.
+    """
+    report, error = build_report_aggregate(report_paths)
+    if report is None:
+        print(f"Error: {error}", file=sys.stderr)
+        return EXIT_USAGE_ERROR
+
+    content = _render_aggregate_content(report, ReportOutputFormat(format_arg))
+
+    if output_arg is not None:
+        ok, write_error = write_report_output(Path(output_arg), content, force=force)
+        if not ok:
+            print(f"Error: {write_error}", file=sys.stderr)
+            return EXIT_FAILURE
+    else:
+        print(content, end="")
+
+    return EXIT_SUCCESS if report.overall is not CheckStatus.FAIL else EXIT_FAILURE
+
+
+def run_workflow_validate(path_arg: str, format_arg: str) -> int:
+    """Validate a workflow file. Performs no execution, network, or subprocess activity.
+
+    Exits 0 if the workflow is valid, 2 if it is not (a schema/usage
+    error).
+    """
+    report = build_workflow_validation_report(path_arg)
+    output_format = OutputFormat(format_arg)
+    if output_format is OutputFormat.JSON:
+        print(render_workflow_validate_json(report))
+    else:
+        print(render_workflow_validate_text(report), end="")
+    return EXIT_SUCCESS if report.status is WorkflowValidationStatus.VALID else EXIT_USAGE_ERROR
+
+
+def _render_workflow_run_content(
+    report: WorkflowRunReport, output_format: ReportOutputFormat
+) -> str:
+    if output_format is ReportOutputFormat.JSON:
+        return render_workflow_run_json(report) + "\n"
+    if output_format is ReportOutputFormat.MARKDOWN:
+        return render_workflow_run_markdown(report)
+    return render_workflow_run_text(report)
+
+
+def run_workflow_run(path_arg: str, format_arg: str, output_arg: str | None, force: bool) -> int:
+    """Validate, then sequentially execute, a workflow file's declared steps.
+
+    Exits 2 for a schema/validation failure -- checked entirely before any
+    step runs. Exits 1 if the run's overall is FAIL, or if writing
+    ``--output`` fails. Exits 0 for overall pass/warn.
+    """
+    report, error = build_workflow_run_report(path_arg)
+    if report is None:
+        print(f"Error: {error}", file=sys.stderr)
+        return EXIT_USAGE_ERROR
+
+    content = _render_workflow_run_content(report, ReportOutputFormat(format_arg))
+
+    if output_arg is not None:
+        ok, write_error = write_report_output(Path(output_arg), content, force=force)
+        if not ok:
+            print(f"Error: {write_error}", file=sys.stderr)
+            return EXIT_FAILURE
+    else:
+        print(content, end="")
+
+    return EXIT_SUCCESS if report.overall is not CheckStatus.FAIL else EXIT_FAILURE
+
+
 def _dispatch_version(args: argparse.Namespace) -> int:
     del args
     return run_version()
@@ -966,6 +1128,18 @@ def _dispatch_health_tcp(args: argparse.Namespace) -> int:
     )
 
 
+def _dispatch_report_aggregate(args: argparse.Namespace) -> int:
+    return run_report_aggregate(args.reports, args.format, args.output, args.force)
+
+
+def _dispatch_workflow_validate(args: argparse.Namespace) -> int:
+    return run_workflow_validate(args.file, args.format)
+
+
+def _dispatch_workflow_run(args: argparse.Namespace) -> int:
+    return run_workflow_run(args.file, args.format, args.output, args.force)
+
+
 _COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
     "version": _dispatch_version,
     "doctor": _dispatch_doctor,
@@ -997,12 +1171,23 @@ _HEALTH_COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
     "tcp": _dispatch_health_tcp,
 }
 
+_REPORT_COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
+    "aggregate": _dispatch_report_aggregate,
+}
+
+_WORKFLOW_COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
+    "validate": _dispatch_workflow_validate,
+    "run": _dispatch_workflow_run,
+}
+
 _COMMAND_GROUPS: dict[str, dict[str, Callable[[argparse.Namespace], int]]] = {
     "config": _CONFIG_COMMANDS,
     "tools": _TOOLS_COMMANDS,
     "inventory": _INVENTORY_COMMANDS,
     "logs": _LOGS_COMMANDS,
     "health": _HEALTH_COMMANDS,
+    "report": _REPORT_COMMANDS,
+    "workflow": _WORKFLOW_COMMANDS,
 }
 
 

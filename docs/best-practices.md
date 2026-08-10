@@ -27,7 +27,7 @@ fields serialize via `.value` rather than the enum object.
 
 ## 4. Stdlib-only runtime
 
-v0.5.0 still has zero runtime dependencies — `argparse`, `contextlib`,
+v0.6.0 still has zero runtime dependencies — `argparse`, `contextlib`,
 `dataclasses`, `datetime`, `enum`, `errno`, `importlib.metadata`, `json`,
 `math`, `os`, `pathlib`, `platform`, `re`, `shutil`, `stat`, `subprocess`
 (confined to `core/runner.py` only), `sys`, `tempfile`, `time`, and
@@ -43,9 +43,15 @@ either: `core/log_reader.py` uses only `os`/`stat`/`errno`;
 3.11, matching this project's floor. `health http`/`health tcp` add no
 new runtime dependency either: `http.client`, `ssl`, `socket`,
 `ipaddress`, `urllib.parse`, and `concurrent.futures` are all standard
-library — no `requests`, `httpx`, or `aiohttp`. Development tooling
-(`pytest`, `ruff`, `mypy`, `build`) lives in the `dev` optional-dependency
-group, never in runtime `dependencies`.
+library — no `requests`, `httpx`, or `aiohttp`. `report aggregate`/
+`workflow` add no new runtime dependency either: `core/report_reader.py`
+and `core/workflow_parser.py` reuse `os`/`stat`/`errno`/`json`/`tomllib`,
+already used elsewhere in the package; `commands/report.py`'s atomic
+`--output` writer reuses the identical `tempfile`/`contextlib` pattern
+`core/config.py`'s `init_config_file()` established in v0.2.0 — no new
+module, dependency, or novel I/O pattern was introduced for it.
+Development tooling (`pytest`, `ruff`, `mypy`, `build`) lives in the
+`dev` optional-dependency group, never in runtime `dependencies`.
 
 ## 5. Deterministic, isolated tests
 
@@ -122,5 +128,18 @@ response-header collection, or redirect-following anywhere; URL userinfo
 is rejected outright; TCP checks are connect-only (no application data
 sent, no banner read). Every other module's existing network prohibition
 is unchanged and regression-tested — see `docs/http-health-safety.md` and
-`docs/health-checks.md` for the complete contracts. See
+`docs/health-checks.md` for the complete contracts. `core/report_reader.py`
+mirrors `core/log_reader.py`'s fd-safety pattern for JSON report input
+(regular files only, symlinks and non-regular files always rejected,
+bounded read, TOCTOU-verified); `core/report_aggregate.py` detects a
+report's kind purely structurally and never blindly embeds a full input
+report into an aggregate. `core/workflow_parser.py` never imports
+`subprocess`/`socket`/`ssl`/`http.client` and performs no execution of
+any kind — `workflow validate` never resolves a tool executable or opens
+a connection. `core/workflow_runner.py` is the sole `core/` module
+permitted to import from `commands/`, and executes a step only through
+the package's own existing `commands/*.py` functions — never a shell,
+never a recursive `maops-py` subprocess, never `eval`/`exec` or dynamic
+imports. See `docs/aggregated-reports.md`, `docs/workflows.md`, and
+`docs/workflow-security.md` for the complete contracts. See
 `.claude/CLAUDE.md` for the authoritative list.

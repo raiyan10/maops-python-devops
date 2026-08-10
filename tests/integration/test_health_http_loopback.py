@@ -162,6 +162,38 @@ def test_query_values_absent_from_output(
     assert data["results"][0]["target"] == f"{base_url}/health?token=[REDACTED]&region=[REDACTED]"
 
 
+def test_original_query_value_reaches_server_but_report_shows_only_redacted(
+    tmp_path: Path, http_loopback_server: Callable[[type[http.server.BaseHTTPRequestHandler]], str]
+) -> None:
+    # The redaction described in docs/http-health-safety.md applies only to
+    # the *report* -- the real, unredacted query string must still reach
+    # the server on the wire. Captures the server's raw received path (via
+    # a class attribute, mirroring _RedirectHandler/_FlakyThenOkHandler's
+    # existing pattern) so both halves of the contract are proven in one
+    # request, not just report-side absence.
+    class _CapturingHandler(http.server.BaseHTTPRequestHandler):
+        received_path: str | None = None
+
+        def do_GET(self) -> None:
+            type(self).received_path = self.path
+            self.send_response(200)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def log_message(self, *args: object) -> None:
+            pass
+
+    base_url = http_loopback_server(_CapturingHandler)
+    result = _run_health_http(
+        tmp_path, f"{base_url}/health?token=super-secret-value&region=ap", "--format", "json"
+    )
+    assert result.returncode == 0
+    assert _CapturingHandler.received_path == "/health?token=super-secret-value&region=ap"
+    assert "super-secret-value" not in result.stdout
+    data = json.loads(result.stdout)
+    assert data["results"][0]["target"] == f"{base_url}/health?token=[REDACTED]&region=[REDACTED]"
+
+
 def test_no_response_body_in_output(
     tmp_path: Path, http_loopback_server: Callable[[type[http.server.BaseHTTPRequestHandler]], str]
 ) -> None:

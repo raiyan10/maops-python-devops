@@ -81,7 +81,16 @@ smoke-install:
 	"$$tmp_dir/venv/bin/maops-py" logs analyze "$$smoke_log" --input-format auto --format json | "$$tmp_dir/venv/bin/python" -m json.tool >/dev/null; \
 	"$$tmp_dir/venv/bin/maops-py" logs parse "$$smoke_log" --input-format auto --format json | "$$tmp_dir/venv/bin/python" -c 'import json,sys; d=json.dumps(json.load(sys.stdin)); assert "smoke-test-secret-do-not-use-1234567890" not in d, "synthetic secret leaked in logs parse output"'; \
 	"$$tmp_dir/venv/bin/maops-py" logs analyze "$$smoke_log" --input-format auto --format json | "$$tmp_dir/venv/bin/python" -c 'import json,sys; d=json.dumps(json.load(sys.stdin)); assert "smoke-test-secret-do-not-use-1234567890" not in d, "synthetic secret leaked in logs analyze output"'; \
-	"$$tmp_dir/venv/bin/python" scripts/smoke/health_smoke_check.py "$$tmp_dir/venv/bin/maops-py"
+	"$$tmp_dir/venv/bin/python" scripts/smoke/health_smoke_check.py "$$tmp_dir/venv/bin/maops-py"; \
+	smoke_doctor_json="$$tmp_dir/doctor-report.json"; \
+	"$$tmp_dir/venv/bin/maops-py" doctor --format json > "$$smoke_doctor_json"; \
+	smoke_inventory_json="$$tmp_dir/inventory-report.json"; \
+	"$$tmp_dir/venv/bin/maops-py" inventory system --format json > "$$smoke_inventory_json"; \
+	"$$tmp_dir/venv/bin/maops-py" report aggregate "$$smoke_doctor_json" "$$smoke_inventory_json" --format json | "$$tmp_dir/venv/bin/python" -m json.tool >/dev/null; \
+	smoke_aggregate_md="$$tmp_dir/aggregate-report.md"; \
+	"$$tmp_dir/venv/bin/maops-py" report aggregate "$$smoke_doctor_json" "$$smoke_inventory_json" --format markdown --output "$$smoke_aggregate_md"; \
+	test -s "$$smoke_aggregate_md"; \
+	"$$tmp_dir/venv/bin/python" scripts/smoke/workflow_smoke_check.py "$$tmp_dir/venv/bin/maops-py" "$$smoke_fs" "$$smoke_log"
 
 quality: format-check lint type-check coverage
 

@@ -68,6 +68,24 @@ Loopback-only integration tests for the health commands
 `http_loopback_server`/`tcp_loopback_listener` fixtures in
 `tests/conftest.py` — never a public host, never a mock standing in for
 a real socket at the integration level.
+`tests/integration/test_workflow_health_loopback.py` reuses the same
+fixtures for `health_http`/`health_tcp` workflow steps.
+
+`report aggregate`'s report-kind detection is purely structural (a fixed,
+unique key combination per supported kind) and its normalization never
+blindly embeds a full input report — see
+[docs/aggregated-reports.md](docs/aggregated-reports.md).
+`core/workflow_runner.py` is the sole module in `core/` permitted to
+import from `commands/` (its entire purpose is orchestrating across other
+commands' own orchestration functions), and executes every workflow step
+through those existing functions — never a shell, never a recursive
+`maops-py` subprocess, never `eval`/`exec` or dynamic imports.
+`workflow validate` performs no execution, network, or subprocess
+activity at all, which is enforced by a dedicated regression test
+(`tests/unit/test_workflow_no_network_no_subprocess.py`). See
+[docs/workflows.md](docs/workflows.md) and
+[docs/workflow-security.md](docs/workflow-security.md) for the complete
+schema and security contracts.
 
 ## Commits and releases
 

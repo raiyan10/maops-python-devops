@@ -183,7 +183,58 @@ targets in one invocation. The printed `Error:` message names which
 target (`target N: ...`) and why. See `docs/health-checks.md`'s target
 syntax sections.
 
-## 20. `maops-py health http`'s JSON output shows a different URL than what I typed
+## 20. `maops-py report aggregate` exits `2` on a report file that "looks fine"
+
+`report aggregate` never guesses — a JSON document is only accepted if it
+structurally matches one of the eight supported `maops-py` report kinds
+(see `docs/aggregated-reports.md`). The printed `Error:` message names
+the specific file and reason: not found, a directory, a symlink (always
+refused, never followed), a non-regular file, oversized, not valid UTF-8,
+not valid JSON, or structurally unrecognized. Check that the file was
+actually produced by `maops-py ... --format json` (not `--format text`)
+and hasn't been hand-edited into an invalid shape.
+
+## 21. `maops-py report aggregate --output`/`maops-py workflow run --output` refuses to write
+
+Same refusal rules as `maops-py config init`: an existing target is
+refused unless `--force`, a symbolic link target is **always** refused
+even with `--force`, and the parent directory must already exist (it is
+never created for you). The printed `Error:` message names the specific
+reason.
+
+## 22. `maops-py workflow validate`/`workflow run` exits `2`
+
+A schema/usage error, checked before any step ever runs — the printed
+`Error:` message (or the JSON `error` field) names the specific reason:
+malformed TOML, an unsupported `schema_version` (only `1` is supported in
+this release), a missing/empty `name`, zero or more than 32 `[[steps]]`,
+a duplicate step `id`, an unknown step `kind` or unknown field, a
+wrong-typed or out-of-range field value, an unsupported `tools_inspect`
+tool name, or an invalid `health_http`/`health_tcp` target/URL (checked
+with the same validators `health http`/`health tcp` themselves use). See
+`docs/workflows.md` for the complete schema reference.
+
+## 23. `maops-py workflow run`'s `inventory_filesystem`/`logs_analyze` step scans the wrong directory
+
+Relative `path` values in these two step kinds resolve against the
+**workflow TOML file's own directory**, not the directory you ran
+`maops-py` from. See `docs/workflows.md`'s "Relative path semantics"
+section — this is intentional, so a workflow file stays portable and
+gives the same result regardless of where it's invoked from.
+
+## 24. `maops-py workflow run` reports a step as `fail` with an `error` field, but the workflow was `valid`
+
+`workflow validate` checks the workflow file's *schema* (field types,
+target syntax, tool-name allowlist membership) — it never probes whether
+a filesystem path exists or a health target is actually reachable, since
+it performs no execution or network activity at all. A step can still
+fail at run time for an operational reason (a filesystem root that
+doesn't exist, a target that refuses every connection attempt) even
+though the workflow itself was schema-valid; check that step's `error`
+field for the specific reason. Earlier and later steps in the same run
+are unaffected — see `docs/workflows.md`'s "Sequential execution" section.
+
+## 25. `maops-py health http`'s JSON output shows a different URL than what I typed
 
 Query parameter *values* are redacted in the report's `target` field
 (keys and their order are preserved) — this is intentional, so a

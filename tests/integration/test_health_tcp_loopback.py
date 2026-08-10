@@ -92,6 +92,50 @@ def test_malformed_target_does_not_discard_other_targets_results(
     assert data["results"][1]["attempts"][0]["failure_reason"] == "invalid_target_encoding"
 
 
+def test_mixed_target_ordering_survives_reversed_completion(
+    tmp_path: Path, tcp_loopback_listener: Callable[..., tuple[str, int]]
+) -> None:
+    # Target 1 ("slow": reserved but never listened on, so every attempt
+    # is refused and retried with a real, fixed sleep between attempts)
+    # is submitted first but completes last; target 2 ("fast": already
+    # listening, succeeds on its first attempt) completes first. Output
+    # order must still match CLI submission order -- mirrors
+    # test_health_http_loopback.py's equivalent HTTP coverage.
+    #
+    # Unlike a "listener starts after a delay" design, the timing
+    # difference here is produced entirely by this *single* health-check
+    # subprocess's own deterministic retry-delay sleeps between refused
+    # attempts -- it never races a second process's (this fixture's
+    # listener thread, or the CLI subprocess itself) startup jitter, which
+    # is exactly the class of flake this module's own docstring warns
+    # about for a plain "refused-then-recovers" test.
+    slow_host, slow_port = tcp_loopback_listener(never_listen=True)
+    fast_host, fast_port = tcp_loopback_listener()
+    result = _run_health_tcp(
+        tmp_path,
+        f"{slow_host}:{slow_port}",
+        f"{fast_host}:{fast_port}",
+        "--retries",
+        "3",
+        "--retry-delay",
+        "0.3",
+        "--workers",
+        "2",
+        "--format",
+        "json",
+    )
+    assert result.returncode == 1
+    data = json.loads(result.stdout)
+    targets = [entry["target"] for entry in data["results"]]
+    assert targets == [f"{slow_host}:{slow_port}", f"{fast_host}:{fast_port}"]
+    indexes = [entry["index"] for entry in data["results"]]
+    assert indexes == [1, 2]
+    assert data["results"][0]["status"] == "fail"
+    assert data["results"][0]["attempts_used"] == 4
+    assert data["results"][1]["status"] == "pass"
+    assert data["results"][1]["attempts_used"] == 1
+
+
 def test_ipv6_loopback_target(tmp_path: Path) -> None:
     sock = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
     try:
