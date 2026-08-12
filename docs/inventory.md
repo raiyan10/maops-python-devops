@@ -112,7 +112,7 @@ full, alongside `doctor`'s equivalent-but-differently-scoped behavior, in
 
 ```json
 {
-  "version": "0.5.0",
+  "version": "0.7.0",
   "host": {
     "hostname": "myhost",
     "os_family": "Linux",
@@ -158,7 +158,7 @@ full, alongside `doctor`'s equivalent-but-differently-scoped behavior, in
 ```
 $ maops-py inventory system
 MAOps Python DevOps Toolkit - System Inventory
-Version:               0.5.0
+Version:               0.7.0
 Hostname:              myhost
 OS:                    Linux 6.8.0
 OS version:            #1 SMP ...

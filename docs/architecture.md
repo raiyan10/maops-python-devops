@@ -1,5 +1,100 @@
 # Architecture
 
+This document covers the complete Day 1-7 (v0.1.0-v0.7.0) architecture:
+package layout, entry points, CLI dispatch, per-command data flow, typed
+models, exit codes, versioning, safety boundaries, tests, and (new for
+v0.7.0) the packaging/release boundary. See
+[docs/portfolio-guide.md](portfolio-guide.md) for the narrative "why,"
+and [docs/release-process.md](release-process.md) for the release
+workflow this document's final section summarizes.
+
+## System overview
+
+```mermaid
+flowchart TB
+    CLI["maops-py (console script)"]
+    MOD["python -m maops_pydevops"]
+    MAIN["cli.py: main() / build_parser()"]
+    CLI --> MAIN
+    MOD --> MAIN
+
+    subgraph CMD["Command layer (commands/*.py) -- thin CLI wiring only"]
+        DOCTORC["doctor.py"]
+        CONFIGC["config.py"]
+        TOOLSC["tools.py"]
+        INVC["inventory.py"]
+        LOGSC["logs.py"]
+        HEALTHC["health.py"]
+        REPORTC["report.py"]
+        WORKFLOWC["workflow.py"]
+    end
+    MAIN --> CMD
+
+    subgraph LOCAL["Core: local inspection (no network, no subprocess)"]
+        PLATFORM["platform.py"]
+        CONFIGCORE["config.py"]
+        SYSINV["system_inventory.py"]
+        FSINV["filesystem_inventory.py"]
+        LOGCORE["log_reader.py / log_parsers.py /\nlog_analysis.py / log_redaction.py"]
+    end
+    DOCTORC --> PLATFORM
+    CONFIGC --> CONFIGCORE
+    INVC --> SYSINV
+    INVC --> FSINV
+    LOGSC --> LOGCORE
+
+    subgraph SUBPROC["Core: subprocess (sole exception)"]
+        RUNNER["runner.py\n5 allowlisted tools, shell=False"]
+    end
+    TOOLSC --> RUNNER
+
+    subgraph NET["Core: health network boundary (sole network-capable modules)"]
+        HTTPCORE["health_http.py"]
+        TCPCORE["health_tcp.py"]
+        HEALTHRUNNER["health_runner.py\nbounded ThreadPoolExecutor"]
+    end
+    HEALTHC --> HTTPCORE
+    HEALTHC --> TCPCORE
+    HTTPCORE --> HEALTHRUNNER
+    TCPCORE --> HEALTHRUNNER
+
+    subgraph COMPOSE["Composition layer (v0.6.0+)"]
+        REPORTAGG["report_reader.py /\nreport_aggregate.py"]
+        WORKFLOWRUN["workflow_parser.py /\nworkflow_runner.py"]
+    end
+    REPORTC --> REPORTAGG
+    WORKFLOWC --> WORKFLOWRUN
+    WORKFLOWRUN -.->|"calls the commands own\nbuild report function, never a\nrecursive subprocess"| DOCTORC
+    WORKFLOWRUN -.-> TOOLSC
+    WORKFLOWRUN -.-> INVC
+    WORKFLOWRUN -.-> LOGSC
+    WORKFLOWRUN -.-> HEALTHC
+    WORKFLOWRUN --> REPORTAGG
+
+    subgraph RENDER["Rendering / export"]
+        OUTPUT["output.py\ntext / JSON / Markdown"]
+        WRITE["report.py: write_report_output()\natomic --output (report agg. + workflow run)"]
+    end
+    CMD --> OUTPUT
+    REPORTC --> WRITE
+    WORKFLOWC --> WRITE
+
+    subgraph PKG["Packaging / release boundary"]
+        BUILD["make build\nwheel + sdist"]
+        SMOKE["make smoke-install\noffline exact-wheel install"]
+        CI[".github/workflows/\npython-validation.yml"]
+    end
+    BUILD --> SMOKE --> CI
+```
+
+Solid arrows are direct calls; dashed arrows from `workflow_runner.py`
+are calls into each command's own existing orchestration function (the
+same one its equivalent standalone CLI subcommand calls), never a
+parallel reimplementation. The packaging/release boundary at the bottom
+is a build-time/CI-time concern, not a runtime data flow — see section 10
+below and [docs/release-process.md](release-process.md) for its complete
+process.
+
 ## 1. Package layout
 
 `src`-layout, so the installed package can never accidentally import
@@ -576,3 +671,47 @@ this project's own CI-adjacent environments) in favor of a target that
 retries with a real, fixed sleep entirely internal to the one subprocess
 under test — a fully deterministic timing differential with no
 cross-process race.
+
+## 10. Packaging and release boundary
+
+This package is built and released as source distributions (sdist +
+wheel) and GitHub Releases only — there is no PyPI publish step and no
+runtime dependency beyond the Python standard library.
+
+```mermaid
+flowchart LR
+    SRC["pyproject.toml\n[project] version\n(sole version source)"]
+    BUILD["make build\npython -m build\n+ archive permission normalization"]
+    WHEEL["dist/*.whl + dist/*.tar.gz"]
+    SMOKE["make smoke-install\nPIP_NO_INDEX=1 --no-deps\nisolated temp venv"]
+    QUALITY["make quality\nformat-check + lint +\ntype-check + coverage"]
+    CHECK["make release-check\nquality -> build -> smoke-install"]
+    CI["python-validation.yml\nPython 3.11-3.14 matrix\ncontents: read only"]
+    TAG["annotated git tag vX.Y.Z"]
+    RELEASE["GitHub Release"]
+
+    SRC --> BUILD --> WHEEL --> SMOKE
+    QUALITY --> CHECK
+    BUILD --> CHECK
+    SMOKE --> CHECK
+    CHECK --> CI --> TAG --> RELEASE
+```
+
+`version.py::get_version()` (section 7) reads `pyproject.toml`'s version
+back via `importlib.metadata.version()` at call time, so the tag, the
+installed package metadata, and the CHANGELOG's version heading are kept
+in agreement by construction, not by manual synchronization — regression-
+tested by `tests/unit/test_version.py`, including the doc-example-drift
+check added in v0.7.0 that pins every CLI-output version example in
+`README.md`/`docs/inventory.md`/`docs/health-checks.md`/
+`docs/log-analysis.md`/`docs/log-parsing.md`/`docs/workflows.md` against
+the real package version.
+
+`make build`'s isolated PEP 517 build environment may fetch declared
+`build-system.requires` from an index; only `make smoke-install`'s
+exact-wheel installation step is deliberately offline
+(`PIP_NO_INDEX=1 --no-deps`). See
+[docs/release-process.md](release-process.md) for the complete,
+step-by-step process this diagram summarizes, including the specialist-
+review and blocker-remediation steps that happen between `make
+release-check` passing locally and a pull request being opened.

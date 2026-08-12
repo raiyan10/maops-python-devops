@@ -21,7 +21,11 @@ make release-check      # quality + build + smoke-install
 ```
 
 `make release-check` is the single command that mirrors
-`.github/workflows/python-validation.yml`.
+`.github/workflows/python-validation.yml`. See
+[docs/release-process.md](docs/release-process.md) for the complete
+release process this chain is part of, and [SECURITY.md](SECURITY.md)
+for this project's security boundaries and vulnerability-reporting
+guidance.
 
 ## Pinned GitHub Actions
 

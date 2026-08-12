@@ -7,7 +7,11 @@ from pathlib import Path
 
 import pytest
 
-from maops_pydevops.core.report_reader import ReportReadFailureReason, read_report_file
+from maops_pydevops.core.report_reader import (
+    MAX_REPORT_FILE_BYTES,
+    ReportReadFailureReason,
+    read_report_file,
+)
 
 
 def test_valid_report_file_parses(tmp_path: Path) -> None:
@@ -101,6 +105,33 @@ def test_file_size_boundary_one_byte_over_rejected(tmp_path: Path) -> None:
     path = tmp_path / "over.json"
     path.write_text(document_text, encoding="utf-8")
     document, reason, detail = read_report_file(str(path), max_bytes=max_bytes)
+    assert document is None
+    assert reason is ReportReadFailureReason.TOO_LARGE
+
+
+def test_real_default_file_size_boundary_exact_limit_accepted(tmp_path: Path) -> None:
+    # The real production MAX_REPORT_FILE_BYTES boundary (no injected
+    # max_bytes override) -- proves the actual compiled-in default, not
+    # just the generic bound-check logic (Day 6 test-review L-3).
+    fixed = '{"k": ""}'
+    padding_len = MAX_REPORT_FILE_BYTES - len(fixed.encode("utf-8"))
+    document_text = '{"k": "' + ("a" * padding_len) + '"}'
+    assert len(document_text.encode("utf-8")) == MAX_REPORT_FILE_BYTES
+    path = tmp_path / "exact.json"
+    path.write_text(document_text, encoding="utf-8")
+    document, reason, detail = read_report_file(str(path))
+    assert reason is None
+    assert document is not None
+
+
+def test_real_default_file_size_boundary_one_byte_over_rejected(tmp_path: Path) -> None:
+    fixed = '{"k": ""}'
+    padding_len = MAX_REPORT_FILE_BYTES - len(fixed.encode("utf-8")) + 1
+    document_text = '{"k": "' + ("a" * padding_len) + '"}'
+    assert len(document_text.encode("utf-8")) == MAX_REPORT_FILE_BYTES + 1
+    path = tmp_path / "over.json"
+    path.write_text(document_text, encoding="utf-8")
+    document, reason, detail = read_report_file(str(path))
     assert document is None
     assert reason is ReportReadFailureReason.TOO_LARGE
 

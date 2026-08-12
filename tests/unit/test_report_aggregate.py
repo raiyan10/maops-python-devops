@@ -12,6 +12,7 @@ from maops_pydevops.core.report_aggregate import (
     normalize_report,
 )
 from maops_pydevops.core.report_models import ReportKind
+from maops_pydevops.core.report_reader import MAX_REPORT_COUNT
 
 DOCTOR_JSON: dict[str, object] = {
     "version": "0.6.0",
@@ -444,6 +445,29 @@ def test_build_aggregate_report_count_boundary_rejects_over_max(tmp_path: Path) 
     assert report is None
     assert error is not None
     assert "got 4" in error
+
+
+def test_build_aggregate_report_count_boundary_accepts_real_default_max(
+    tmp_path: Path,
+) -> None:
+    # The real production MAX_REPORT_COUNT boundary (no injected
+    # max_reports override) -- proves the actual compiled-in default, not
+    # just the generic bound-check logic (Day 6 test-review L-3).
+    paths = [_write_json(tmp_path / f"r{i}.json", DOCTOR_JSON) for i in range(MAX_REPORT_COUNT)]
+    report, error = build_aggregate_report(paths)
+    assert error is None
+    assert report is not None
+    assert report.summary.reports == MAX_REPORT_COUNT
+
+
+def test_build_aggregate_report_count_boundary_rejects_real_default_max_plus_one(
+    tmp_path: Path,
+) -> None:
+    paths = [_write_json(tmp_path / f"r{i}.json", DOCTOR_JSON) for i in range(MAX_REPORT_COUNT + 1)]
+    report, error = build_aggregate_report(paths)
+    assert report is None
+    assert error is not None
+    assert f"got {MAX_REPORT_COUNT + 1}" in error
 
 
 def test_build_aggregate_file_size_boundary(tmp_path: Path) -> None:

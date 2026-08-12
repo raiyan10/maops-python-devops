@@ -38,7 +38,8 @@ configuration file at all — like `doctor` and `inventory`, their
 `--format` always defaults to `text` (with `markdown` as a third explicit
 choice neither `doctor` nor `inventory` support), so a broken or missing
 configuration file never affects either command's behavior or exit code.
-Day 6 introduces no new persistent configuration keys.
+Day 6 introduces no new persistent configuration keys, and neither does
+Day 7 — v0.7.0 is a hardening and documentation release only.
 
 ## Supported keys
 

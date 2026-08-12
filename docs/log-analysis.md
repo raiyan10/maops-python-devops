@@ -161,7 +161,7 @@ parse`'s exit semantics (see
 
 ```json
 {
-  "version": "0.6.0",
+  "version": "0.7.0",
   "path": "/tmp/demo.log",
   "options": {
     "input_format": "auto",
