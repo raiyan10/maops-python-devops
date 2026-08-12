@@ -1,5 +1,11 @@
 # Roadmap
 
+**v0.7.0 is the final planned release in this project's seven-day
+portfolio arc.** The planned seven-day implementation (v0.1.0 through
+v0.7.0) is complete; no further feature work is scheduled. Everything
+below "Completed in v0.7.0" is an idea that was deliberately scoped out,
+not a commitment to future work — see that section's own framing.
+
 ## Completed in v0.1.0
 
 - `src`-layout package `maops_pydevops`, Python 3.11+, with a CI matrix
@@ -172,10 +178,48 @@ and `output_format` only.
   `tomllib`, `os`, `stat`, `errno`, `json`, `tempfile`, `contextlib`, and
   `pathlib` — all already-used standard library.
 
-## Post-v0.6.0 possibilities
+## Completed in v0.7.0
 
-These are not committed, scheduled, or designed yet — listed only as
-plausible next steps, to be scoped on their own day:
+Final hardening and portfolio-readiness release — no new commands, no
+new network-capable subsystem, no new runtime dependency.
+
+- Closed the Medium/Low findings deliberately deferred from the Day 6
+  release-readiness follow-up: bidi/zero-width Unicode sanitization
+  regression coverage across all applicable text/Markdown renderer
+  combinations (not only the one previously tested), an expanded
+  workflow no-network/no-subprocess architectural boundary covering
+  `commands/workflow.py`, `core/workflow_models.py`,
+  `core/workflow_parser.py`, and `core/workflow_runner.py` (plus a
+  dynamic no-subprocess-during-execution proof using the real
+  `build_doctor_report()`), stale `0.5.0`/`0.6.0` example versions
+  corrected in `README.md`/`docs/inventory.md`/`docs/health-checks.md`/
+  `docs/log-analysis.md`/`docs/log-parsing.md`/`docs/workflows.md`, a
+  documentation-version-drift regression test
+  (`tests/unit/test_version.py`), documented Markdown escaping
+  rationale, production-boundary tests against the real
+  `MAX_REPORT_COUNT`/`MAX_REPORT_FILE_BYTES` constants, explicit
+  shell-metacharacter-inertness regression tests, and a workflow-layer
+  health HTTP query-privacy integration test against a real ephemeral
+  loopback server.
+- A final security audit across the complete source tree confirmed no
+  `shell=True`, `os.system`, `eval`, `exec`, `pickle`, unbounded
+  concurrency, or unrestricted network behavior, and no new mutable
+  global state or import-time side effect.
+- New portfolio-facing documentation: [SECURITY.md](../SECURITY.md),
+  [docs/release-process.md](release-process.md), and
+  [docs/portfolio-guide.md](portfolio-guide.md).
+- [docs/architecture.md](architecture.md) rewritten to represent the
+  complete Day 1-7 architecture (Mermaid system-overview and packaging/
+  release-boundary diagrams added); [README.md](../README.md)
+  reorganized as the final portfolio landing page.
+- Still zero third-party runtime dependencies — no new module or
+  standard-library addition beyond what v0.6.0 already used.
+
+## Optional future enhancements
+
+These are not committed, scheduled, or designed — listed only as
+plausible ideas that were deliberately scoped out of the completed
+seven-day arc, not a roadmap for future work:
 
 - Structured logging/verbosity flags (`-v`/`-q`) for the CLI.
 - Configuration support for customizing which optional tools `doctor`

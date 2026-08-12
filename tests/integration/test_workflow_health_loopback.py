@@ -97,6 +97,63 @@ targets = ["{host}:{port}"]
     assert data["steps"][0]["status"] == "pass"
 
 
+def test_workflow_run_health_http_step_redacts_query_secret_in_every_format(
+    tmp_path: Path, http_loopback_server: Callable[[type[http.server.BaseHTTPRequestHandler]], str]
+) -> None:
+    """A ``health_http`` step's URL query secret must reach the real
+    loopback server unredacted on the wire, while every user-facing
+    ``workflow run`` report representation (``--format json``/``text``/
+    ``markdown``) must never contain it -- re-proven at the workflow layer,
+    not just the standalone ``health http`` command (Day 6 test-review
+    L-5)."""
+
+    class _CapturingHandler(http.server.BaseHTTPRequestHandler):
+        received_path: str | None = None
+
+        def do_GET(self) -> None:
+            type(self).received_path = self.path
+            self.send_response(200)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def log_message(self, *args: object) -> None:
+            pass
+
+    base_url = http_loopback_server(_CapturingHandler)
+    secret = "super-secret-workflow-token"
+    workflow_path = tmp_path / "wf.toml"
+    workflow_path.write_text(
+        f"""
+schema_version = 1
+name = "http workflow"
+
+[[steps]]
+id = "check"
+kind = "health_http"
+urls = ["{base_url}/health?token={secret}&region=ap"]
+""",
+        encoding="utf-8",
+    )
+
+    for output_format in ("json", "text", "markdown"):
+        _CapturingHandler.received_path = None
+        result = _run_workflow(tmp_path, "run", str(workflow_path), "--format", output_format)
+        assert result.returncode == 0
+        # The server side proves the real, unredacted secret was sent on
+        # the wire -- request handling is unaffected by report rendering.
+        assert _CapturingHandler.received_path == f"/health?token={secret}&region=ap"
+        # workflow run's normalized health_http report never embeds the
+        # raw target URL at all (core/report_aggregate.py's
+        # _normalize_health() reduces every health_http/health_tcp step to
+        # pass/warn/fail counts only) -- a stronger privacy property than
+        # per-field redaction, since there is no URL/query string present
+        # to redact in the first place.
+        assert secret not in result.stdout
+        if output_format == "json":
+            data = json.loads(result.stdout)
+            assert base_url not in json.dumps(data)
+
+
 def test_workflow_run_health_steps_never_reach_public_network(
     tmp_path: Path,
     http_loopback_server: Callable[[type[http.server.BaseHTTPRequestHandler]], str],

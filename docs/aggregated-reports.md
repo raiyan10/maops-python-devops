@@ -125,6 +125,32 @@ interpolated into a line. JSON output is unaffected (`json.dumps` already
 escapes control characters correctly, and Unicode formatting characters
 are valid JSON string content).
 
+### Markdown escaping rationale
+
+`_sanitize_for_markdown()` (`core/output.py`) runs every externally
+sourced string through `_sanitize_for_text()` first (the control-
+character/bidi-override/zero-width escaping above), then translates nine
+additional characters that are significant to GitHub-flavored Markdown:
+
+| Character | Escaped to | Why |
+|---|---|---|
+| `\` | `\\` | The escape character itself — must be escaped first, or a later escape (e.g. an already-escaped `\*`) could be reinterpreted by the renderer. |
+| `` ` `` | `` \` `` | Opens inline code / fenced code blocks; unescaped, external text could break out of the surrounding line or start a fake code span. |
+| `*` | `\*` | Opens emphasis/strong-emphasis runs; unescaped, external text could bold/italicize adjacent report content or leave a run unterminated. |
+| `_` | `\_` | Same emphasis-run risk as `*`, GFM's other emphasis delimiter. |
+| `\|` | `\\|` | A raw pipe inside a table cell (every `report aggregate`/`workflow run` metric is rendered as a table) would silently insert an extra column, corrupting the table structure rather than just the cell's content. |
+| `[` | `\[` | Opens a Markdown link/reference; unescaped, external text combined with a later `]( ... )` could forge a link. |
+| `]` | `\]` | Closes a Markdown link/reference — escaped together with `[` since either half alone can still combine with attacker-controlled text elsewhere on the line to form a link. |
+| `<` | `\<` | Starts a raw HTML tag or autolink (`<https://...>`) in GFM; unescaped, external text could inject arbitrary HTML into a rendered report (e.g. on GitHub) or forge a clickable autolink. |
+| `>` | `\>` | Closes a raw HTML tag/autolink, and on its own starts a blockquote at the beginning of a line; escaped alongside `<` for the same injection reason. |
+
+This table is applied via a single `str.translate()` call
+(`_MARKDOWN_SPECIAL_CHARS`) after control-character escaping, so a
+Markdown-significant character can never reach the renderer un-escaped
+regardless of where in an externally sourced field it appears — there is
+no separate "safe" subset of Markdown syntax this boundary intentionally
+allows through.
+
 ## Secure `--output` export
 
 `--output PATH` writes the rendered content to a file instead of stdout,

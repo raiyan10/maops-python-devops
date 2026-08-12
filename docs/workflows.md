@@ -103,7 +103,7 @@ complete list of excluded capabilities and why.
 ```bash
 $ maops-py workflow validate release.toml
 MAOps Python DevOps Toolkit - Workflow Validation
-Version:      0.6.0
+Version:      0.7.0
 Path:         release.toml
 Status:       VALID
 Workflow:     release readiness
@@ -132,7 +132,7 @@ steps' results.
 
 ```json
 {
-  "version": "0.6.0",
+  "version": "0.7.0",
   "path": "release.toml",
   "name": "release readiness",
   "options": {"max_steps": 32},
@@ -218,7 +218,11 @@ json`, or `--format markdown`; `--output PATH` writes atomically at mode
 symbolic link target even with `--force`, requires the parent directory
 to already exist, and leaves no temporary file behind on failure. See
 [docs/aggregated-reports.md](aggregated-reports.md#secure---output-export)
-for the complete contract (shared verbatim between the two commands).
+for the complete contract (shared verbatim between the two commands), and
+[docs/aggregated-reports.md](aggregated-reports.md#markdown-escaping-rationale)
+for why each Markdown-significant character is escaped in `--format
+markdown` output (also shared verbatim — both commands render through the
+same `_sanitize_for_markdown()`).
 
 ## No scheduler or cron feature
 

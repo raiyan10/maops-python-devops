@@ -218,12 +218,33 @@ def test_control_character_sanitized_in_text_output(
     assert "\\x1b" in out
 
 
-def test_unicode_formatting_character_sanitized_in_text_output(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    fs_data = {
+#: Representative bidi-override, zero-width, and control characters that
+#: this codebase's sanitization boundary must escape rather than emit raw
+#: into any text/Markdown report line -- see day-06-release-readiness-
+#: followup.md section 7, item M-1 (bidi/zero-width sanitization was
+#: previously tested in only one of four applicable renderer x format
+#: combinations).
+_SANITIZATION_CASES = [
+    pytest.param("‮", "\\u202e", id="u202e-rtl-override"),
+    pytest.param("‭", "\\u202d", id="u202d-ltr-override"),
+    pytest.param("​", "\\u200b", id="u200b-zero-width-space"),
+    pytest.param("‌", "\\u200c", id="u200c-zwnj"),
+    pytest.param("‍", "\\u200d", id="u200d-zwj"),
+    pytest.param("⁦", "\\u2066", id="u2066-left-to-right-isolate"),
+    pytest.param("⁧", "\\u2067", id="u2067-right-to-left-isolate"),
+    pytest.param("⁨", "\\u2068", id="u2068-first-strong-isolate"),
+    pytest.param("⁩", "\\u2069", id="u2069-pop-directional-isolate"),
+    pytest.param("\n", "\\n", id="embedded-newline"),
+    pytest.param("\r", "\\r", id="carriage-return"),
+    pytest.param("\x1b", "\\x1b", id="esc"),
+    pytest.param("\x7f", "\\x7f", id="del"),
+]
+
+
+def _fs_data_with_root(root: str) -> dict[str, object]:
+    return {
         "version": "0.6.0",
-        "root": "/tmp/‮evil",
+        "root": root,
         "options": {
             "max_depth": 2,
             "max_entries": 100,
@@ -248,9 +269,51 @@ def test_unicode_formatting_character_sanitized_in_text_output(
         "truncated": False,
         "overall": "pass",
     }
+
+
+@pytest.mark.parametrize(("char", "escaped"), _SANITIZATION_CASES)
+def test_bidi_and_control_characters_sanitized_in_text_output(
+    char: str, escaped: str, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # AAA/ZZZ markers prove the character was replaced in-place by its
+    # escape sequence -- unlike a bare "char not in out" check, this holds
+    # even for "\n"/"\r", which also occur legitimately as real line
+    # separators elsewhere in the (correctly) multi-line text output.
+    fs_data = _fs_data_with_root(f"/tmp/AAA{char}ZZZevil")
     path = _write_report(tmp_path / "fs.json", fs_data)
     exit_code = main(["report", "aggregate", path])
     assert exit_code == EXIT_SUCCESS
     out = capsys.readouterr().out
-    assert "‮" not in out
-    assert "\\u202e" in out
+    assert f"AAA{escaped}ZZZ" in out
+
+
+@pytest.mark.parametrize(("char", "escaped"), _SANITIZATION_CASES)
+def test_bidi_and_control_characters_sanitized_in_markdown_output(
+    char: str, escaped: str, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fs_data = _fs_data_with_root(f"/tmp/AAA{char}ZZZevil")
+    path = _write_report(tmp_path / "fs.json", fs_data)
+    exit_code = main(["report", "aggregate", path, "--format", "markdown"])
+    assert exit_code == EXIT_SUCCESS
+    out = capsys.readouterr().out
+    # Markdown sanitization runs _sanitize_for_text first (producing the
+    # same "\xHH"/"\uHHHH" escape), then Markdown-escapes the resulting
+    # literal backslash itself, doubling it.
+    markdown_escaped = escaped.replace("\\", "\\\\")
+    assert f"AAA{markdown_escaped}ZZZ" in out
+
+
+def test_bidi_character_not_escaped_by_text_sanitizer_in_json_output(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """JSON output must keep round-tripping the original character exactly
+    via ``json.dumps``'s own (unmodified) escaping -- the text/Markdown
+    sanitization boundary (``_sanitize_for_text``'s ``\\u202e``-style
+    escape table) is deliberately never applied to JSON output."""
+    fs_data = _fs_data_with_root("/tmp/‮evil")
+    path = _write_report(tmp_path / "fs.json", fs_data)
+    exit_code = main(["report", "aggregate", path, "--format", "json"])
+    assert exit_code == EXIT_SUCCESS
+    data = json.loads(capsys.readouterr().out)
+    assert data["reports"][0]["source_path"] == path
+    assert "‮evil" in data["reports"][0]["headline"]

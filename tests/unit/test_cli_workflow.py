@@ -297,6 +297,84 @@ def test_run_text_output_sanitizes_step_id(
     assert "\\nOverall status: PASS\\nFAKE" in out
 
 
+#: Representative bidi-override, zero-width, and control characters that
+#: this codebase's sanitization boundary must escape rather than emit raw
+#: into any text/Markdown report line -- see day-06-release-readiness-
+#: followup.md section 7, item M-1 (bidi/zero-width sanitization was
+#: previously tested in only one of four applicable renderer x format
+#: combinations, and never against ``step.id``).
+_SANITIZATION_CASES = [
+    pytest.param("‮", "\\u202e", id="u202e-rtl-override"),
+    pytest.param("‭", "\\u202d", id="u202d-ltr-override"),
+    pytest.param("​", "\\u200b", id="u200b-zero-width-space"),
+    pytest.param("‌", "\\u200c", id="u200c-zwnj"),
+    pytest.param("‍", "\\u200d", id="u200d-zwj"),
+    pytest.param("⁦", "\\u2066", id="u2066-left-to-right-isolate"),
+    pytest.param("⁧", "\\u2067", id="u2067-right-to-left-isolate"),
+    pytest.param("⁨", "\\u2068", id="u2068-first-strong-isolate"),
+    pytest.param("⁩", "\\u2069", id="u2069-pop-directional-isolate"),
+    pytest.param("\n", "\\n", id="embedded-newline"),
+    pytest.param("\r", "\\r", id="carriage-return"),
+    pytest.param("\x1b", "\\x1b", id="esc"),
+    pytest.param("\x7f", "\\x7f", id="del"),
+]
+
+
+def _workflow_toml_with_step_id(char: str) -> str:
+    toml_escape = f"\\u{ord(char):04x}"
+    return (
+        'schema_version = 1\nname = "x"\n\n'
+        f'[[steps]]\nid = "AAA{toml_escape}ZZZ"\nkind = "doctor"\n'
+    )
+
+
+@pytest.mark.parametrize(("char", "escaped"), _SANITIZATION_CASES)
+def test_run_text_output_sanitizes_bidi_and_control_step_id(
+    char: str, escaped: str, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = tmp_path / "wf.toml"
+    path.write_text(_workflow_toml_with_step_id(char), encoding="utf-8")
+    exit_code = main(["workflow", "run", str(path)])
+    assert exit_code == EXIT_SUCCESS
+    out = capsys.readouterr().out
+    # AAA/ZZZ markers prove the character was replaced in-place by its
+    # escape sequence -- unlike a bare "char not in out" check, this holds
+    # even for "\n"/"\r", which also occur legitimately as real line
+    # separators elsewhere in the (correctly) multi-line text output.
+    assert f"AAA{escaped}ZZZ" in out
+
+
+@pytest.mark.parametrize(("char", "escaped"), _SANITIZATION_CASES)
+def test_run_markdown_output_sanitizes_bidi_and_control_step_id(
+    char: str, escaped: str, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = tmp_path / "wf.toml"
+    path.write_text(_workflow_toml_with_step_id(char), encoding="utf-8")
+    exit_code = main(["workflow", "run", str(path), "--format", "markdown"])
+    assert exit_code == EXIT_SUCCESS
+    out = capsys.readouterr().out
+    # Markdown sanitization runs _sanitize_for_text first (producing the
+    # same "\xHH"/"\uHHHH" escape), then Markdown-escapes the resulting
+    # literal backslash itself, doubling it.
+    markdown_escaped = escaped.replace("\\", "\\\\")
+    assert f"AAA{markdown_escaped}ZZZ" in out
+
+
+def test_run_json_output_preserves_bidi_step_id_unescaped_by_text_sanitizer(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """JSON output must keep round-tripping the original character exactly
+    via ``json.dumps``'s own (unmodified) escaping -- the text/Markdown
+    sanitization boundary (``_sanitize_for_text``'s ``\\u202e``-style
+    escape table) is deliberately never applied to JSON output."""
+    path = tmp_path / "wf.toml"
+    path.write_text(_workflow_toml_with_step_id("‮"), encoding="utf-8")
+    exit_code = main(["workflow", "run", str(path), "--format", "json"])
+    assert exit_code == EXIT_SUCCESS
+    data = json.loads(capsys.readouterr().out)
+    assert data["steps"][0]["id"] == "AAA‮ZZZ"
+
+
 def test_run_text_output_sanitizes_path(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """A workflow file path containing embedded newlines must not forge an
     extra ``Overall status:`` footer line in ``workflow run``'s default text

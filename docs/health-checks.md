@@ -147,7 +147,7 @@ of excluded capabilities and why.
 
 ```json
 {
-  "version": "0.5.0",
+  "version": "0.7.0",
   "protocol": "http",
   "options": {
     "method": "GET",
@@ -210,7 +210,7 @@ for the exact condition each one represents.
 
 ```json
 {
-  "version": "0.5.0",
+  "version": "0.7.0",
   "protocol": "tcp",
   "options": {
     "timeout_seconds": 3.0,

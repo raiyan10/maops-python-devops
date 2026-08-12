@@ -471,6 +471,10 @@ def render_health_tcp_json(report: TcpReport) -> str:
     return report.to_json()
 
 
+#: GitHub-flavored-Markdown-significant characters, escaped so external
+#: text can never forge table cells, emphasis runs, links, or raw HTML/
+#: autolinks. Full per-character rationale: docs/aggregated-reports.md,
+#: "Markdown escaping rationale".
 _MARKDOWN_SPECIAL_CHARS = str.maketrans(
     {
         "\\": "\\\\",

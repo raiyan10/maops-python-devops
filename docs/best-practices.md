@@ -27,7 +27,7 @@ fields serialize via `.value` rather than the enum object.
 
 ## 4. Stdlib-only runtime
 
-v0.6.0 still has zero runtime dependencies — `argparse`, `contextlib`,
+v0.7.0 still has zero runtime dependencies — `argparse`, `contextlib`,
 `dataclasses`, `datetime`, `enum`, `errno`, `importlib.metadata`, `json`,
 `math`, `os`, `pathlib`, `platform`, `re`, `shutil`, `stat`, `subprocess`
 (confined to `core/runner.py` only), `sys`, `tempfile`, `time`, and
@@ -49,7 +49,9 @@ and `core/workflow_parser.py` reuse `os`/`stat`/`errno`/`json`/`tomllib`,
 already used elsewhere in the package; `commands/report.py`'s atomic
 `--output` writer reuses the identical `tempfile`/`contextlib` pattern
 `core/config.py`'s `init_config_file()` established in v0.2.0 — no new
-module, dependency, or novel I/O pattern was introduced for it.
+module, dependency, or novel I/O pattern was introduced for it. v0.7.0
+adds no new runtime dependency either — it is a hardening and
+documentation release only, with no new module of any kind.
 Development tooling (`pytest`, `ruff`, `mypy`, `build`) lives in the
 `dev` optional-dependency group, never in runtime `dependencies`.
 

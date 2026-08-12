@@ -5,6 +5,65 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-08-11
+
+Final hardening and portfolio-readiness release. No new commands, no new
+network-capable subsystem, no new runtime dependency. Closes the
+Medium/Low findings deliberately deferred from the Day 6
+release-readiness follow-up, adds a final security-audit pass, and adds
+the portfolio-facing documentation (`SECURITY.md`,
+`docs/release-process.md`, `docs/portfolio-guide.md`) and a refreshed
+`docs/architecture.md`/`README.md`/`docs/roadmap.md` reflecting the
+complete Day 1-7 toolkit. The toolkit remains standard-library-only at
+runtime.
+
+### Added
+
+- `SECURITY.md` — supported release, vulnerability reporting guidance,
+  security boundaries (workflow-is-data, network boundary, redaction/
+  privacy, filesystem/symlink protections, dependency philosophy) and
+  unsupported guarantees/threat models.
+- `docs/release-process.md` — the real, complete release process from
+  branch to GitHub Release, including exactly what `make build`,
+  `make smoke-install`, and `make release-check` each do and do not
+  guarantee (the isolated build backend may install declared
+  `build-system.requires`; only the exact-wheel smoke install is
+  deliberately offline).
+- `docs/portfolio-guide.md` — a technically grounded explanation of the
+  project for a technical client, recruiter, or interviewer: problem,
+  architecture, feature evolution, security model, testing strategy,
+  release engineering, and intentionally excluded features.
+- Regression tests closing the Day 6 release-readiness follow-up's
+  deferred Medium/Low findings: bidi/zero-width Unicode sanitization
+  coverage across all applicable text/Markdown renderer combinations, an
+  expanded workflow no-network/no-subprocess architectural boundary
+  covering `commands/workflow.py`, `core/workflow_models.py`,
+  `core/workflow_parser.py`, and `core/workflow_runner.py`, a
+  documentation-version-drift regression test, production-boundary tests
+  against the real `MAX_REPORT_COUNT`/`MAX_REPORT_FILE_BYTES` constants,
+  explicit shell-metacharacter-inertness tests, and a workflow-layer
+  health HTTP query-privacy integration test against a real ephemeral
+  loopback server.
+
+### Changed
+
+- `docs/architecture.md` rewritten to represent the complete Day 1-7
+  architecture, including report aggregation and declarative workflows.
+- `README.md` reorganized as the final portfolio landing page.
+- `docs/roadmap.md` marks v0.7.0 as the final planned seven-day
+  portfolio release; unimplemented ideas moved under optional future
+  enhancements.
+- Stale `0.5.0`-era version examples corrected to the current release in
+  `README.md`, `docs/inventory.md`, and `docs/health-checks.md`.
+- `core/output.py`'s Markdown escaping rationale documented.
+
+### Fixed
+
+- None — the sole Day 6 High finding (unsanitized `workflow validate`/
+  `workflow run` text rendering) was already fixed and released in
+  v0.6.0; this release closes only the deferred Medium/Low test-backstop
+  and documentation-staleness gaps.
+
 ## [0.6.0] - 2026-08-10
 
 Adds two new capabilities: aggregating multiple `maops-py` JSON reports
